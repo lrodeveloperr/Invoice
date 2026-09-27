@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Dated Service Invoice app icon</title>
+  <desc>A white invoice with three connected work-date rows and a vermilion approval mark on a deep indigo field.</desc>
+
+  <!-- Full-bleed square artwork. iOS applies the platform mask. -->
+  <rect width="1024" height="1024" fill="#103F91"/>
+
+  <!-- The document remains inside the iOS safe area at small sizes. -->
+  <rect x="184" y="126" width="656" height="772" rx="56" fill="#FFFFFF"/>
+
+  <!-- Three work dates joined into one invoice. -->
+  <path d="M322 341V627" stroke="#13B9DA" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="322" cy="341" r="42" fill="#103F91"/>
+  <circle cx="322" cy="484" r="42" fill="#103F91"/>
+  <circle cx="322" cy="627" r="42" fill="#103F91"/>
+
+  <!-- Deliberately bold line items so the subject survives at 48 px. -->
+  <path d="M423 341H721" stroke="#103F91" stroke-width="38" stroke-linecap="round"/>
+  <path d="M423 484H721" stroke="#103F91" stroke-width="38" stroke-linecap="round"/>
+  <path d="M423 627H655" stroke="#103F91" stroke-width="38" stroke-linecap="round"/>
+
+  <!-- Restrained vermilion approval accent inspired by Japanese document practice. -->
+  <circle cx="704" cy="752" r="76" fill="#D93B30"/>
+  <path d="M660 754L692 786L749 718" fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
