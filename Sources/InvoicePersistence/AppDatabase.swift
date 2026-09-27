@@ -551,10 +551,12 @@ public actor AppDatabase {
                 let invoiceID: String = row["id"]
                 let relativePath: String = row["pdf_relative_path"]
                 let sha256: String = row["pdf_sha256"]
+                let pathComponents = relativePath.split(separator: "/", omittingEmptySubsequences: false)
                 guard UUID(uuidString: invoiceID) != nil,
-                      relativePath.hasPrefix("Invoices/"),
+                      pathComponents.count == 2,
+                      pathComponents.first == "Invoices",
+                      pathComponents.last?.isEmpty == false,
                       !relativePath.contains(".."),
-                      URL(fileURLWithPath: relativePath).pathComponents.count == 2,
                       relativePath.lowercased().hasSuffix(".pdf"),
                       sha256.count == 64,
                       sha256.allSatisfy({ $0.isHexDigit }) else {
