@@ -118,7 +118,8 @@ public actor BackupService {
             }
         }
         let actualFiles = Set(try regularFiles(root: standardizedRoot).map {
-            String($0.path.dropFirst(standardizedRoot.path.count + 1))
+            let canonicalPath = $0.standardizedFileURL.path
+            return String(canonicalPath.dropFirst(standardizedRoot.path.count + 1))
         }.filter { $0 != "manifest.json" })
         let expectedFiles = Set(manifest.files.map(\.relativePath))
         guard actualFiles == expectedFiles else {
