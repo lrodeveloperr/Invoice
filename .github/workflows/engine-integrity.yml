@@ -1,0 +1,31 @@
+name: Engine integrity
+
+on:
+  push:
+    branches:
+      - integrity-candidate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record Apple toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Resolve exact dependencies
+        run: swift package resolve
+      - name: Build with warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Run automated tests
+        run: swift test -Xswiftc -warnings-as-errors --parallel
+      - name: Run deterministic property harness
+        run: swift run invoice-harness property
+      - name: Run full engine demonstration
+        run: swift run invoice-harness demo --root "${RUNNER_TEMP}/invoice-harness-ci"
