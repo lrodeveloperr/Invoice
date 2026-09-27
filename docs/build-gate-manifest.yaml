@@ -16,10 +16,12 @@ support_matrices:
       device_family: iPhone
       reference_device: "iPhone SE (2nd generation)"
       supported: true
-    - id: ipad
+    - id: ipados18_ipad
       platform: iPadOS
-      supported: false
-      scope: EXCLUDED
+      minimum_version: "18.0"
+      device_family: iPad
+      reference_device: "iPad mini (6th generation)"
+      supported: true
     - id: mac
       platform: macOS
       supported: false
@@ -113,8 +115,8 @@ fixtures:
 performance_budgets:
   environment:
     build_configuration: Release
-    device: "iPhone SE (2nd generation)"
-    os: "oldest supported iOS"
+    devices: ["iPhone SE (2nd generation)", "iPad mini (6th generation)"]
+    operating_systems: ["iOS 18", "iPadOS 18"]
     warmup_runs: 1
     measured_runs: 20
     percentile: p95
@@ -190,15 +192,42 @@ requirements:
     risk: high
     acceptance_test_ids: [T-PLATFORM-001]
     dependencies: []
+  - id: REQ-PLAT-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "The production app shall install and complete the primary workflow on every iPad running iPadOS 18.0 or later."
+    evidence: ["owner:universal-ios-app-policy", "apple:swiftui"]
+    risk: high
+    acceptance_test_ids: [T-PLATFORM-002]
+    dependencies: []
   - id: REQ-NAV-001
     scope: LAUNCH
     status: LOCKED
     owner: AppShell
-    normative_text: "The root shell shall use the iOS 18 TabView APIs for exactly Work, Invoices and Settings, and each list/detail workflow shall use NavigationSplitView that collapses to one column at the reference iPhone's compact width without duplicate navigation chrome or loss of the selected record."
+    normative_text: "The root shell shall use the iOS and iPadOS 18 TabView APIs for exactly Work, Invoices and Settings."
     evidence: ["owner:ios18-tab-and-split-preference", "apple:tab-navigation", "apple:robust-navigation"]
     risk: high
     acceptance_test_ids: [T-NAV-001]
-    dependencies: [REQ-PLAT-001]
+    dependencies: [REQ-PLAT-001, REQ-PLAT-002]
+  - id: REQ-NAV-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "Each list/detail workflow shall use NavigationSplitView that collapses to one column at the reference iPhone's compact width without duplicate navigation chrome or loss of the selected record."
+    evidence: ["owner:ios18-tab-and-split-preference", "apple:robust-navigation"]
+    risk: high
+    acceptance_test_ids: [T-NAV-002]
+    dependencies: [REQ-PLAT-001, REQ-NAV-001]
+  - id: REQ-NAV-003
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "Each list/detail workflow shall keep the list and selected detail visible simultaneously at the reference iPad's regular width and shall preserve selection through rotation, resizing and tab changes."
+    evidence: ["owner:ipad-split-view-requirement", "apple:sidebar-adaptable", "apple:robust-navigation"]
+    risk: high
+    acceptance_test_ids: [T-NAV-003]
+    dependencies: [REQ-PLAT-002, REQ-NAV-001]
   - id: REQ-LOC-001
     scope: LAUNCH
     status: LOCKED
@@ -207,7 +236,7 @@ requirements:
     evidence: ["listing:japan-localization"]
     risk: high
     acceptance_test_ids: [T-LOCALE-001]
-    dependencies: [REQ-PLAT-001]
+    dependencies: [REQ-PLAT-001, REQ-PLAT-002]
   - id: REQ-LOC-002
     scope: LAUNCH
     status: LOCKED
@@ -597,18 +626,45 @@ tests:
     expected_oracle: "Every action completes without crash and produces the declared records and file."
     severity_on_failure: high
     automation_status: planned
+  - id: T-PLATFORM-002
+    requirement_ids: [REQ-PLAT-002]
+    platform_matrix: [ipados18_ipad]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "Clean installation on an iPad mini (6th generation)."
+    actions: [install, launch, record_visit, build_preview, issue_free_invoice, export_backup]
+    expected_oracle: "Every action completes without crash and produces the declared records and file."
+    severity_on_failure: high
+    automation_status: planned
   - id: T-NAV-001
     requirement_ids: [REQ-NAV-001]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
+    fixture_ids: [REVIEWER-SAMPLE-01, FLOW-100-01]
+    starting_state: "Japanese sample data on both reference devices."
+    actions: [open_each_tab, switch_tabs, return_to_prior_tab]
+    expected_oracle: "Exactly three persistent destinations exist and are labeled Work, Invoices and Settings in the selected language."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-NAV-002
+    requirement_ids: [REQ-NAV-002]
     platform_matrix: [ios18_iphone]
     fixture_ids: [REVIEWER-SAMPLE-01, FLOW-100-01]
     starting_state: "Japanese sample data on an iPhone SE (2nd generation) in portrait and landscape."
     actions: [open_each_tab, select_list_record, open_detail, navigate_back, switch_tabs, return_to_prior_tab, rotate_device, repeat_primary_flow]
-    expected_oracle: "Exactly three persistent tabs exist; each list/detail flow collapses to one usable compact column; no duplicate header or orphaned detail appears; each tab restores its selected record and navigation path."
+    expected_oracle: "Each list/detail flow collapses to one usable compact column; no duplicate header or orphaned detail appears; each tab restores its selected record and navigation path."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-NAV-003
+    requirement_ids: [REQ-NAV-003]
+    platform_matrix: [ipados18_ipad]
+    fixture_ids: [REVIEWER-SAMPLE-01, FLOW-100-01]
+    starting_state: "Japanese sample data on an iPad mini (6th generation) in portrait, landscape and supported resized widths."
+    actions: [open_work, select_visit, rotate, resize, switch_to_invoices, select_invoice, switch_tabs, return_to_prior_tab]
+    expected_oracle: "At regular width the list and selected detail remain simultaneously visible; selection survives rotation, resizing and tab changes; compact resized width collapses without duplicate navigation chrome or data loss."
     severity_on_failure: high
     automation_status: planned
   - id: T-LOCALE-001
     requirement_ids: [REQ-LOC-001, REQ-LOC-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [LOCALE-SWITCH-01]
     starting_state: "New install on an English-language device."
     actions: [launch, assert_japanese, switch_to_english, inspect_all_visible_destinations, relaunch]
@@ -617,7 +673,7 @@ tests:
     automation_status: planned
   - id: T-LOCALE-002
     requirement_ids: [REQ-LOC-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [PDF-JA-LONG-01, PDF-EN-LONG-01]
     starting_state: "String catalogs compiled for Japanese and English."
     actions: [enumerate_keys, compare_placeholders, render_long_strings, run_accessibility_label_audit]
@@ -626,7 +682,7 @@ tests:
     automation_status: planned
   - id: T-OFFLINE-001
     requirement_ids: [REQ-OFFLINE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "Airplane mode; no cached StoreKit product required for free flow."
     actions: [record_visit, build_invoice, preview_pdf, issue_first_invoice, reopen_pdf, export_backup]
@@ -635,7 +691,7 @@ tests:
     automation_status: planned
   - id: T-DATE-001
     requirement_ids: [REQ-DATE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [LOCALE-SWITCH-01]
     starting_state: "Visits across daylight-saving, time-zone and year boundaries."
     actions: [change_clock, change_timezone, relaunch, query_visits, render_invoice]
@@ -644,7 +700,7 @@ tests:
     automation_status: planned
   - id: T-CALC-001
     requirement_ids: [REQ-MONEY-001, REQ-LINE-001, REQ-TAX-001, REQ-TAX-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [CALC-MIXED-01]
     starting_state: "Empty pure-domain test process."
     actions: [calculate_each_fixed_vector, compare_rate_subtotals, compare_rounded_tax, repeat_100_times]
@@ -653,7 +709,7 @@ tests:
     automation_status: planned
   - id: T-CALC-002
     requirement_ids: [REQ-MONEY-001, REQ-QTY-001, REQ-LINE-001, REQ-TOTAL-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [CALC-BOUNDARY-01]
     starting_state: "Empty pure-domain test process."
     actions: [evaluate_each_boundary, attempt_overflow, attempt_invalid_scale, attempt_zero_quantity]
@@ -662,7 +718,7 @@ tests:
     automation_status: planned
   - id: T-PROPERTY-001
     requirement_ids: [REQ-TAX-001, REQ-TOTAL-001, REQ-BILLING-001, REQ-SNAPSHOT-001, REQ-RECOVERY-001, REQ-RESTORE-002, REQ-FREE-002, REQ-GATE-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [CALC-MIXED-01, RECOVERY-ISSUE-01, STOREKIT-ALL-01]
     starting_state: "Seeded generated domain and persistence states."
     actions: [run_10000_sequences_per_invariant_for_each_seed]
@@ -671,7 +727,7 @@ tests:
     automation_status: planned
   - id: T-AUTOSAVE-001
     requirement_ids: [REQ-AUTOSAVE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [REVIEWER-SAMPLE-01]
     starting_state: "Editable draft and fault-injecting clock/persistence adapter."
     actions: [edit_valid_field, advance_249ms, assert_not_due, advance_1ms, assert_saved, edit_again, background_immediately, force_quit, relaunch]
@@ -680,7 +736,7 @@ tests:
     automation_status: planned
   - id: T-INVOICE-BUILD-001
     requirement_ids: [REQ-SELECT-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "100 unbilled visits across historical non-consecutive dates."
     actions: [select_customer, select_arbitrary_date_range, deselect_individual_visits, calculate_draft]
@@ -689,7 +745,7 @@ tests:
     automation_status: planned
   - id: T-ISSUE-001
     requirement_ids: [REQ-BILLING-001, REQ-NUMBER-001, REQ-ISSUE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "Valid draft and staged canonical PDF."
     actions: [issue, query_snapshot, query_links, query_visit_states, query_allowance, retry_same_command]
@@ -698,7 +754,7 @@ tests:
     automation_status: planned
   - id: T-IMMUTABLE-001
     requirement_ids: [REQ-SNAPSHOT-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "One issued invoice."
     actions: [edit_source_customer, edit_source_site, edit_source_template, attempt_snapshot_update, read_invoice]
@@ -707,7 +763,7 @@ tests:
     automation_status: planned
   - id: T-NUMBER-001
     requirement_ids: [REQ-NUMBER-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "Invoices around a Gregorian year boundary with injected failed and concurrent attempts."
     actions: [issue_in_old_year, fail_next_issue, issue_again, issue_in_new_year, void, issue_again]
@@ -716,7 +772,7 @@ tests:
     automation_status: planned
   - id: T-RECOVERY-001
     requirement_ids: [REQ-ISSUE-001, REQ-ISSUE-002, REQ-RECOVERY-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [RECOVERY-ISSUE-01]
     starting_state: "One valid invoice draft for each issue protocol fault point."
     actions: [inject_failure, terminate_process, relaunch, run_recovery, inspect_database_and_files]
@@ -725,7 +781,7 @@ tests:
     automation_status: planned
   - id: T-SHARE-001
     requirement_ids: [REQ-SHARE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [REVIEWER-SAMPLE-01]
     starting_state: "One newly issued free invoice with recorded hashes and states."
     actions: [open_share_sheet, cancel, reopen_share_sheet, simulate_share_failure, compare_state]
@@ -734,7 +790,7 @@ tests:
     automation_status: planned
   - id: T-CORRECTION-001
     requirement_ids: [REQ-VOID-001, REQ-CORRECT-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [FLOW-100-01]
     starting_state: "Issued and paid invoice variants."
     actions: [void_without_confirmation, void_with_confirmation, issue_replacement, inspect_links_and_hashes]
@@ -743,7 +799,7 @@ tests:
     automation_status: planned
   - id: T-PDF-001
     requirement_ids: [REQ-PDF-001, REQ-PDF-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [PDF-JA-LONG-01]
     starting_state: "Immutable Japanese invoice snapshot."
     actions: [create_layout_plan, render_pdf, inspect_media_boxes, inspect_glyph_bounds, extract_text]
@@ -752,7 +808,7 @@ tests:
     automation_status: planned
   - id: T-PDF-002
     requirement_ids: [REQ-PDF-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [PDF-EN-LONG-01]
     starting_state: "Immutable invoice snapshot with maximum approved text expansion."
     actions: [render_pdf, rasterize_pages, compare_geometry_and_overflow_oracles]
@@ -761,7 +817,7 @@ tests:
     automation_status: planned
   - id: T-PDF-IDENTITY-001
     requirement_ids: [REQ-PDF-003]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [PDF-JA-LONG-01]
     starting_state: "One issued invoice and recorded canonical SHA-256."
     actions: [load_preview_data, load_reshare_data, export_backup, read_backup_pdf, hash_each]
@@ -770,7 +826,7 @@ tests:
     automation_status: planned
   - id: T-BACKUP-001
     requirement_ids: [REQ-BACKUP-001, REQ-BACKUP-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [BACKUP-CLEAN-01]
     starting_state: "Free-used data set with drafts, issued, paid, voided and corrected invoices."
     actions: [export_without_pro, enumerate_package, verify_counts, verify_sizes, verify_hashes]
@@ -779,7 +835,7 @@ tests:
     automation_status: planned
   - id: T-BACKUP-HOSTILE-001
     requirement_ids: [REQ-BACKUP-002, REQ-RESTORE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [BACKUP-HOSTILE-01]
     starting_state: "Known live database and files, with one hostile package per variant."
     actions: [attempt_preflight_for_each_variant, inspect_live_hashes]
@@ -788,7 +844,7 @@ tests:
     automation_status: planned
   - id: T-RESTORE-001
     requirement_ids: [REQ-RESTORE-001, REQ-RESTORE-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [BACKUP-CLEAN-01, MIGRATION-ALL-01]
     starting_state: "Clean device and populated-device variants."
     actions: [preflight, restore_replace, verify, reset, preflight, restore_merge, inject_commit_failure]
@@ -797,7 +853,7 @@ tests:
     automation_status: planned
   - id: T-RESTORE-ENTITLEMENT-001
     requirement_ids: [REQ-RESTORE-003, REQ-ACCESS-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [BACKUP-CLEAN-01, STOREKIT-ALL-01]
     starting_state: "Cross-product of free, Pro and revoked device states with free/Pro-origin backups."
     actions: [restore_each_backup, refresh_current_entitlements, inspect_access_and_limits]
@@ -806,7 +862,7 @@ tests:
     automation_status: planned
   - id: T-GATE-001
     requirement_ids: [REQ-FREE-001, REQ-GATE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [STOREKIT-ALL-01]
     starting_state: "Free user with zero, one, two and two-plus-one-deactivated customers."
     actions: [add_customer_in_each_state, reactivate_customer]
@@ -815,7 +871,7 @@ tests:
     automation_status: planned
   - id: T-GATE-002
     requirement_ids: [REQ-FREE-002, REQ-GATE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [STOREKIT-ALL-01]
     starting_state: "Free user before and after one successful clean invoice issue."
     actions: [preview_many_times, issue_first, cancel_share, void_first, attempt_second_issue]
@@ -824,7 +880,7 @@ tests:
     automation_status: planned
   - id: T-STOREKIT-001
     requirement_ids: [REQ-PRO-001, REQ-GATE-002, REQ-ACCESS-001, REQ-STOREKIT-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [STOREKIT-ALL-01]
     starting_state: "One isolated StoreKit test session per transaction state."
     actions: [load_product, assert_display_price, purchase_or_cancel_or_pend_or_fail, observe_updates, restore_explicitly, revoke, inspect_domain]
@@ -833,7 +889,7 @@ tests:
     automation_status: planned
   - id: T-PRIVACY-001
     requirement_ids: [REQ-PRIVACY-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [REVIEWER-SAMPLE-01]
     starting_state: "Network capture active and OSLog store empty."
     actions: [execute_full_workflow, inspect_connections, inspect_logs_for_fixture_values]
@@ -842,7 +898,7 @@ tests:
     automation_status: planned
   - id: T-PRIVACY-002
     requirement_ids: [REQ-PRIVACY-002]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: []
     starting_state: "Release archive and generated Xcode privacy report."
     actions: [parse_manifest, parse_report, scan_dependency_apis, compare_declarations]
@@ -851,7 +907,7 @@ tests:
     automation_status: planned
   - id: T-MIGRATION-001
     requirement_ids: [REQ-MIGRATE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [MIGRATION-ALL-01]
     starting_state: "One immutable copy of every historical schema fixture."
     actions: [migrate_each_to_current, run_foreign_key_check, run_invariant_check, compare_snapshot_fields_and_hashes]
@@ -860,7 +916,7 @@ tests:
     automation_status: planned
   - id: T-PERFORMANCE-001
     requirement_ids: [REQ-PERF-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [PERF-LARGE-01]
     starting_state: "Release build on reference device after one warm-up."
     actions: [run_each_budget_operation_20_times, collect_time_memory_storage, calculate_p95]
@@ -869,7 +925,7 @@ tests:
     automation_status: planned
   - id: T-REVIEWER-001
     requirement_ids: [REQ-SAMPLE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: [REVIEWER-SAMPLE-01]
     starting_state: "Clean installation with no account."
     actions: [load_sample, inspect_work, preview_invoice, reset_sample]
@@ -878,7 +934,7 @@ tests:
     automation_status: planned
   - id: T-DELIVERY-001
     requirement_ids: [REQ-RELEASE-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: []
     starting_state: "Signed disposable release tag in a non-production delivery rehearsal."
     actions: [trigger_xcode_cloud, run_gates, archive, upload_test_build, inspect_release_configuration]
@@ -887,7 +943,7 @@ tests:
     automation_status: planned
   - id: T-QUALITY-001
     requirement_ids: [REQ-QUALITY-001]
-    platform_matrix: [ios18_iphone]
+    platform_matrix: [ios18_iphone, ipados18_ipad]
     fixture_ids: []
     starting_state: "Baseline clean build, then injected warning and mock critical dependency finding."
     actions: [build_baseline, inject_warning, assert_failure, inject_vulnerability_result, assert_failure]
@@ -907,4 +963,4 @@ excluded_scope:
   - construction_photos_and_public_works_reporting
   - cloud_accounts_and_automatic_sync
   - tax_or_legal_advice
-  - ipad_mac_web_and_android_clients
+  - mac_visionpro_web_and_android_clients
