@@ -1,0 +1,43 @@
+{
+  "locale": "ja-JP",
+  "device": "iPhone 6.9-inch",
+  "dimensions": {
+    "width": 1320,
+    "height": 2868
+  },
+  "mode": "RGB",
+  "opaque": true,
+  "panel": {
+    "x": 66,
+    "y": 520,
+    "width": 1188,
+    "height": 1958,
+    "radius": 64
+  },
+  "top_clear_space": 520,
+  "bottom_clear_space": 390,
+  "frames": [
+    {
+      "order": 1,
+      "caption_ja": "月末の請求書を、数分で",
+      "caption_en": "Create Month-End Invoices in Minutes",
+      "file": "marketing/screenshots/ja-JP/iphone-6.9/shells/01-month-end-invoices-ja-shell.png",
+      "sha256": "4dbbed3a6b0a36f9379b71e9132407c155479d35ad544d542111bdb72887d98c"
+    },
+    {
+      "order": 2,
+      "caption_ja": "作業日と現場が、そのまま明細に",
+      "caption_en": "Dates and Job Sites Become Invoice Lines",
+      "file": "marketing/screenshots/ja-JP/iphone-6.9/shells/02-dates-and-sites-ja-shell.png",
+      "sha256": "d87e020178fa896e61dd426463b9142c1807c3995f62db4a00a8b9c813fb9373"
+    },
+    {
+      "order": 3,
+      "caption_ja": "送る前に、PDFを正確に確認",
+      "caption_en": "Check the Exact PDF Before Sending",
+      "file": "marketing/screenshots/ja-JP/iphone-6.9/shells/03-pdf-preview-ja-shell.png",
+      "sha256": "33df43f2e69ff97f9c92ba692fdf6b299a0b477eae49be0007b3118ee1175317"
+    }
+  ],
+  "contact_sheet": "marketing/screenshots/ja-JP/iphone-6.9/contact-sheet.png"
+}
