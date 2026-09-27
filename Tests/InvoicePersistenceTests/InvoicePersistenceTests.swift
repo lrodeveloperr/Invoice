@@ -69,6 +69,8 @@ final class InvoicePersistenceTests: XCTestCase {
         _ = try await seed(database: sourceDatabase)
         let package = sourceRoot.appendingPathComponent("Export.invoicebackup", isDirectory: true)
         try await BackupService(database: sourceDatabase, filesRoot: sourceRoot).export(to: package, appBuild: "tests")
+        let packageEntries = try FileManager.default.contentsOfDirectory(atPath: package.path)
+        XCTAssertEqual(Set(packageEntries), Set(["data.sqlite", "manifest.json", "pdfs"]))
 
         let targetDatabase = try AppDatabase(path: targetRoot.appendingPathComponent("data.sqlite").path)
         let backup = BackupService(database: targetDatabase, filesRoot: targetRoot)

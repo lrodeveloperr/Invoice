@@ -452,7 +452,19 @@ public actor AppDatabase {
     public func exportDatabase(to path: String) throws {
         let destination = try DatabaseQueue(path: path)
         try writer.backup(to: destination)
+        try destination.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            try db.execute(sql: "PRAGMA journal_mode = DELETE")
+        }
         try destination.close()
+
+        let fileManager = FileManager.default
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = path + suffix
+            if fileManager.fileExists(atPath: sidecar) {
+                try fileManager.removeItem(atPath: sidecar)
+            }
+        }
     }
 
     public static func validateDatabaseFile(at path: String) throws {
