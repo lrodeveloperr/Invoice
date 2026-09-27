@@ -397,6 +397,59 @@ final class InvoicePersistenceTests: XCTestCase {
         }
     }
 
+    func testDraftQueriesReturnNewestAndExactDraft() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        try await database.saveDraft(fixture.draft)
+
+        let drafts = try await database.drafts()
+        XCTAssertEqual(drafts.map(\.id), [fixture.draft.id])
+        XCTAssertEqual(try await database.draft(id: fixture.draft.id), fixture.draft)
+        XCTAssertNil(try await database.draft(id: UUID()))
+    }
+
+    func testCanonicalPDFReadVerifiesStoredHash() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let expected = Data("canonical-pdf".utf8)
+        let service = IssueService(database: database, filesRoot: root) { _ in expected }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        XCTAssertEqual(try await service.canonicalPDFData(for: invoice), expected)
+
+        let path = try XCTUnwrap(invoice.pdfRelativePath)
+        try Data("tampered".utf8).write(to: root.appendingPathComponent(path), options: .atomic)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await service.canonicalPDFData(for: invoice)
+        }
+    }
+
+    func testDeleteAllDomainDataClearsBusinessRecordsAndEntitlement() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        _ = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: false
+        )
+
+        try await database.deleteAllDomainData()
+        XCTAssertNil(try await database.business())
+        XCTAssertTrue(try await database.customers().isEmpty)
+        XCTAssertTrue(try await database.visits().isEmpty)
+        XCTAssertTrue(try await database.invoices().isEmpty)
+        XCTAssertNil(try await database.entitlementUsage(hasPro: false).firstCleanInvoiceID)
+        try await database.integrityCheck()
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("invoice-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

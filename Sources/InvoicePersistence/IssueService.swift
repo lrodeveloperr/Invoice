@@ -100,6 +100,20 @@ public actor IssueService {
         }
     }
 
+    public func canonicalPDFData(for invoice: IssuedInvoice) throws -> Data {
+        guard let relativePath = invoice.pdfRelativePath,
+              let expectedHash = invoice.pdfSHA256 else {
+            throw InvoiceError.corruptData("missing_canonical_pdf_reference")
+        }
+        let url = try recoveryURL(relativePath: relativePath, directory: "Invoices")
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard actualHash == expectedHash else {
+            throw InvoiceError.corruptData("canonical_pdf_hash_mismatch")
+        }
+        return data
+    }
+
     private func matchesHash(url: URL, expected: String) throws -> Bool {
         guard fileManager.fileExists(atPath: url.path) else { return false }
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])

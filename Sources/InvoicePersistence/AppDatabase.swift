@@ -301,6 +301,24 @@ public actor AppDatabase {
         }
     }
 
+    public func drafts() throws -> [InvoiceDraft] {
+        try writer.read { db in
+            try Data.fetchAll(db, sql: "SELECT payload FROM invoice_draft ORDER BY updated_at DESC, id")
+                .map { try Self.decode(InvoiceDraft.self, from: $0) }
+        }
+    }
+
+    public func draft(id: UUID) throws -> InvoiceDraft? {
+        try writer.read { db in
+            guard let data: Data = try Data.fetchOne(
+                db,
+                sql: "SELECT payload FROM invoice_draft WHERE id = ?",
+                arguments: [id.uuidString.lowercased()]
+            ) else { return nil }
+            return try Self.decode(InvoiceDraft.self, from: data)
+        }
+    }
+
     public func invoices() throws -> [IssuedInvoice] {
         try writer.read { db in
             try Data.fetchAll(db, sql: "SELECT payload FROM issued_invoice ORDER BY issue_date DESC, number DESC")
@@ -322,6 +340,22 @@ public actor AppDatabase {
     public func deleteDraft(id: UUID) throws {
         try writer.write { db in
             try db.execute(sql: "DELETE FROM invoice_draft WHERE id = ?", arguments: [id.uuidString.lowercased()])
+        }
+    }
+
+    public func deleteAllDomainData() throws {
+        try writer.write { db in
+            try db.execute(sql: "DELETE FROM file_operation_journal")
+            try db.execute(sql: "DELETE FROM invoice_visit_link")
+            try db.execute(sql: "DELETE FROM issued_invoice")
+            try db.execute(sql: "DELETE FROM invoice_draft")
+            try db.execute(sql: "DELETE FROM visit")
+            try db.execute(sql: "DELETE FROM site")
+            try db.execute(sql: "DELETE FROM customer")
+            try db.execute(sql: "DELETE FROM business_profile")
+            try db.execute(sql: "DELETE FROM invoice_sequence")
+            try db.execute(sql: "DELETE FROM app_setting")
+            try db.execute(sql: "UPDATE entitlement_usage SET first_clean_invoice_id = NULL WHERE singleton = 1")
         }
     }
 

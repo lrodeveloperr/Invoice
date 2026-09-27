@@ -32,3 +32,12 @@ jobs:
         run: swift run invoice-harness property
       - name: Run full engine demonstration
         run: swift run invoice-harness demo --root "${RUNNER_TEMP}/invoice-harness-ci"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate universal app project
+        run: xcodegen generate
+      - name: Build iPhone and iPad app
+        run: >-
+          xcodebuild -project Invoice.xcodeproj -scheme Invoice
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build
