@@ -242,7 +242,7 @@ final class InvoicePersistenceTests: XCTestCase {
 
         let databaseURL = package.appendingPathComponent("data.sqlite")
         let hostile = try DatabaseQueue(path: databaseURL.path)
-        try hostile.write { db in
+        try await hostile.write { db in
             try db.execute(sql: "DROP TRIGGER prevent_duplicate_active_invoice_reactivation")
             try db.execute(
                 sql: "UPDATE issued_invoice SET status = 'issued' WHERE id = ?",
