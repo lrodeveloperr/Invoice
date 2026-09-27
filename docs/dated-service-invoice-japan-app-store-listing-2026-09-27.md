@@ -3,7 +3,7 @@
 **Status:** `DRAFT_READY`  
 **Run mode:** live App Store Connect draft created; not submitted for review  
 **Target storefront:** Japan  
-**Supported device:** iPhone  
+**Supported devices:** iPhone and iPad  
 **Primary metadata and first-launch language:** Japanese  
 **Optional in-app language:** English, selected from Settings  
 **Release option:** Automatically release after App Review approval  
@@ -16,7 +16,7 @@ Japanese is the customer-facing launch language. The app always starts in Japane
 
 The live App Store Connect record, listing copy, ASO fields, category, age rating, pricing, availability, privacy response, review contact/notes, release setting and Lifetime Pro product are configured. The app has not been submitted for review.
 
-The listing remains `DRAFT_READY`, not `READY_TO_SUBMIT`, until the final archive proves the local-only privacy claim, Japanese/English language switch, tax behavior, StoreKit entitlement, PDF output, backup/restore and free/paid boundaries. Screenshots, the IAP review screenshot and a verified app-specific privacy page also remain required before submission.
+The listing remains `DRAFT_READY`, not `READY_TO_SUBMIT`, until the final archive proves the local-only privacy claim, Japanese/English language switch, tax behavior, StoreKit entitlement, PDF output, backup/restore and free/paid boundaries. The iPhone and iPad screenshot sets, the IAP review screenshot and a verified app-specific privacy page also remain required before submission.
 
 ### Live App Store Connect state — 2026-09-27
 
@@ -210,7 +210,7 @@ This is not a subscription. The current price is displayed directly from the App
 
 ## 5. Screenshot and icon brief
 
-Use three authentic Japanese iPhone screenshots from the final build. English screenshots are not required for the Japan-only storefront. The English equivalents below are owner translations, not text to place on the Japanese assets.
+Use three authentic Japanese iPhone screenshots and three authentic Japanese iPad screenshots from the final build. Both device sets use the same three-message sequence. English screenshots are not required for the Japan-only storefront. The English equivalents below are owner translations, not text to place on the Japanese assets.
 
 | Order | Japanese caption | English equivalent | Required source screen | Proof shown |
 | ---: | --- | --- | --- | --- |
@@ -220,7 +220,9 @@ Use three authentic Japanese iPhone screenshots from the final build. English sc
 
 ### Screenshot production rules
 
-- Primary master: **1320 × 2868 px**, portrait, no alpha channel. This is a currently accepted 6.9-inch iPhone size; recheck Apple's live specification before export.
+- iPhone master: **1320 × 2868 px**, portrait, no alpha channel. This is a currently accepted 6.9-inch iPhone size.
+- iPad master: **2752 × 2064 px**, landscape, no alpha channel. This is a currently accepted 13-inch iPad size and should visibly prove the split-view list/detail workflow.
+- Apple requires the 13-inch screenshot set when the app runs on iPad. Recheck the live specification immediately before export.
 - Use one consistent fictional Japanese cleaning or maintenance business, customer and set of visits across all three frames.
 - Show Japanese UI only. No mixed Japanese/English interface.
 - No static purchase price in screenshots.
@@ -318,7 +320,7 @@ The name contains the primary task and credible service verticals. The subtitle 
 | Non-consumable lifetime Pro; no subscription or ads | Product created in App Store Connect | Test purchase/restore and confirm the final binary contains no subscription or ad code. |
 | Target Japan price ¥2,000 | Live App Store Connect base price and owner-approved product spec | Use StoreKit's live price; do not hard-code it in customer-facing copy. |
 | Tax fields and calculations | Planned deterministic engine | Verify with current official Japanese requirements and fixed tests before using the description unchanged. |
-| iPhone-only launch | Current product decision | Confirm deployment target and final device-family configuration. |
+| Universal iPhone and iPad launch | Current product decision | Confirm both device families in the final target and pass the compact/regular-width navigation matrix. |
 
 ## 11. Validation
 
@@ -331,4 +333,4 @@ The name contains the primary task and credible service verticals. The subtitle 
 - Japanese is the only storefront localization at launch. English is disclosed as an in-app language and must be fully reachable in Settings.
 - Final human/build review remains required for tax behavior, privacy, StoreKit, backup/restore, exact PDF output, language parity, accessibility support, screenshots and every free/paid boundary. Recheck all deployed URLs immediately before submission.
 
-**Final listing-stage decision:** `DRAFT_READY`. The live record, non-media listing configuration and Japanese privacy/support pages are complete; only media and build-dependent declarations remain. The next listing action is to produce the final icon and authentic Japanese screenshots plus the IAP review screenshot, upload the signed build, test the purchase/restore flow, and audit the archive before adding anything for review.
+**Final listing-stage decision:** `DRAFT_READY`. The live record, non-media listing configuration and Japanese privacy/support pages are complete; only media and build-dependent declarations remain. The next listing action is to produce the final icon, authentic Japanese iPhone and iPad screenshot sets, and the IAP review screenshot; then upload the signed universal build, test the purchase/restore flow, and audit the archive before adding anything for review.
