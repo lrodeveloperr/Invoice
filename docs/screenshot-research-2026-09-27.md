@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use three portrait, borderless 6.9-inch iPhone assets at **1320 × 2868 px**. Each asset leads with one oversized Japanese outcome and leaves a large, consistent aperture for authentic final-build UI. The campaign uses dark navy type, a restrained blue/cyan system, generous white space, and no price, rating, ranking, device shell, or unsupported performance claim.
+Use two matched three-image sets: portrait, borderless 6.9-inch iPhone assets at **1320 × 2868 px**, and landscape, borderless 13-inch iPad assets at **2752 × 2064 px**. Each asset leads with one oversized Japanese outcome and leaves a large, consistent aperture for authentic final-build UI. The iPad set must use authentic split-view screens rather than enlarged iPhone layouts. The campaign uses dark navy type, a restrained blue/cyan system, generous white space, and no price, rating, ranking, device shell, or unsupported performance claim.
 
 The app's own differentiated story remains the centre of the campaign:
 
@@ -29,11 +29,12 @@ The app's own differentiated story remains the centre of the campaign:
 
 ## Creative system
 
-- Canvas: 1320 × 2868 px, portrait, opaque sRGB PNG.
+- iPhone canvas: 1320 × 2868 px, portrait, opaque sRGB PNG.
+- iPad canvas: 2752 × 2064 px, landscape, opaque sRGB PNG.
 - Caption block: centred, two lines maximum, Noto Sans JP Bold, dark navy.
-- Aperture: `x=66`, `y=520`, `width=1188`, `height=1958`, corner radius 64 px.
-- Top clear space: 520 px.
-- Bottom clear space: 390 px, exactly `round(0.75 × 520)`.
+- iPhone aperture: `x=66`, `y=520`, `width=1188`, `height=1958`, corner radius 64 px.
+- iPhone top clear space: 520 px; bottom clear space: 390 px, exactly `round(0.75 × 520)`.
+- iPad shell geometry is to be locked when authentic split-view captures exist; preserve the caption hierarchy and maximize the two-column UI aperture rather than reusing the phone crop.
 - Backgrounds: pale blue, pale teal, and pale indigo within one campaign palette.
 - Authentic UI: inserted later without redrawing; source pixels may only be proportionally scaled and clipped.
 - Exclusions: no static purchase price, rating badge, ranking, fabricated UI, English storefront text, or device hardware frame.
