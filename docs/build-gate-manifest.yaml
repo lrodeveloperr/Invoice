@@ -1,0 +1,893 @@
+manifest_version: 1
+project:
+  id: dated-service-invoice-japan
+  japanese_name: "日付別請求書・作業明細"
+  english_name: "Dated Service Invoice"
+  artifact_date: "2026-09-27"
+  phase: preimplementation
+  status: READY_TO_IMPLEMENT
+  implementation_present: false
+
+support_matrices:
+  platform:
+    - id: ios17_iphone
+      platform: iOS
+      minimum_version: "17.0"
+      device_family: iPhone
+      reference_device: "iPhone SE (2nd generation)"
+      supported: true
+    - id: ipad
+      platform: iPadOS
+      supported: false
+      scope: EXCLUDED
+    - id: mac
+      platform: macOS
+      supported: false
+      scope: EXCLUDED
+  locale:
+    - id: ja_JP
+      interface_language: Japanese
+      default: true
+      currency: JPY
+      calendar: gregorian
+    - id: en_control
+      interface_language: English
+      default: false
+      currency: JPY
+      calendar: gregorian
+      note: "Owner control layer; it does not translate an existing issued snapshot."
+  entitlement:
+    - id: free_unused
+      pro: false
+      clean_invoice_used: false
+      active_customer_limit: 2
+      new_clean_issue_allowed: true
+    - id: free_used
+      pro: false
+      clean_invoice_used: true
+      active_customer_limit: 2
+      new_clean_issue_allowed: false
+    - id: pro
+      pro: true
+      clean_invoice_used: any
+      active_customer_limit: unlimited
+      new_clean_issue_allowed: true
+    - id: revoked
+      pro: false
+      clean_invoice_used: persisted
+      existing_data_access: true
+  input_profiles:
+    - id: normal_repeat_visit
+      quantity_scale: "0...3"
+      line_count: "1...10"
+      visit_count: "1...100"
+    - id: boundary_invoice
+      quantity_max: "999999.999"
+      unit_price_yen_max: 999999999
+      invoice_total_yen_max: 9999999999999
+    - id: hostile_import
+      formats: [malformed_json, bad_hash, path_traversal, symlink, newer_schema]
+
+definitions:
+  active_customer: "A customer row whose active flag is true; deactivated customers do not count toward the free capacity."
+  clean_invoice: "An issued canonical PDF without the preview watermark."
+  complete_backup: "A package containing every live and historical domain record, every canonical issued PDF, schema metadata, record counts and hashes; StoreKit entitlement is excluded."
+  compatible_backup: "A package whose schema version is at most the newest supported version and has a registered migration path to the current schema."
+  deterministic_calculation: "For identical normalized inputs and stored policies, all integer yen outputs and validation results are identical."
+  exact_preview: "The issued preview and subsequent share load the same stored PDF file bytes identified by the same SHA-256 hash."
+  historical_date: "Any valid Gregorian LocalDate accepted by the storage bounds, independent of the device's current month."
+  immediate_language_switch: "All currently visible localizable UI strings refresh before the next user action and without process restart."
+  large_dataset: "10,000 visits, 30,000 visit lines, 1,000 issued invoices and 1,000 canonical PDFs."
+  recent_staged_file: "A file-operation journal artifact created less than 24 elapsed hours before recovery begins."
+  readable_pdf_text: "Body font size is at least 9 PDF points and no glyph bounding box crosses the 36-point page margins."
+  successful_issue: "The database snapshot, source links, billed states, allowance state and readable canonical PDF are all present and mutually consistent."
+
+fixtures:
+  - id: CALC-MIXED-01
+    description: "0%, 8% and 10% lines with fractional quantities under floor, half-up and ceiling policies."
+  - id: CALC-BOUNDARY-01
+    description: "Zero price, maximum quantity/price/total and one-yen overflow cases."
+  - id: FLOW-100-01
+    description: "100 unbilled visits on non-consecutive dates across four sites."
+  - id: PDF-JA-LONG-01
+    description: "Japanese descriptions, uncommon kanji, emoji, combining marks and multi-page totals."
+  - id: PDF-EN-LONG-01
+    description: "English control strings expanded to 200% of Japanese source length."
+  - id: RECOVERY-ISSUE-01
+    description: "Fault injection before and after every issue-protocol boundary."
+  - id: BACKUP-CLEAN-01
+    description: "Valid complete backup with PDFs and hashes."
+  - id: BACKUP-HOSTILE-01
+    description: "Malformed JSON, missing PDF, bad hash, path traversal, symlink and newer schema variants."
+  - id: MIGRATION-ALL-01
+    description: "One database fixture for every released schema version and a current-schema target."
+  - id: STOREKIT-ALL-01
+    description: "Success, cancelled, pending, unverified, interrupted, revoked, restored and offline product-load states."
+  - id: PERF-LARGE-01
+    description: "The declared large dataset with 500 lines in the selected invoice."
+  - id: LOCALE-SWITCH-01
+    description: "Japanese first launch, English switch, relaunch, clock/time-zone changes and existing issued snapshots."
+  - id: REVIEWER-SAMPLE-01
+    description: "Resettable Japanese sample customer, site, visits and draft invoice."
+
+performance_budgets:
+  environment:
+    build_configuration: Release
+    device: "iPhone SE (2nd generation)"
+    os: "oldest supported iOS"
+    warmup_runs: 1
+    measured_runs: 20
+    percentile: p95
+  budgets:
+    cold_launch_to_ledger_ms: 1500
+    first_100_ledger_rows_ms: 100
+    persisted_edit_after_debounce_ms: 150
+    calculate_100_visits_500_lines_ms: 50
+    render_100_visits_500_lines_ms: 2000
+    issue_excluding_share_ms: 2500
+    export_large_backup_ms: 15000
+    restore_large_backup_ms: 30000
+    pdf_peak_memory_mib: 150
+    database_metadata_mib: 100
+
+simulation:
+  deterministic_seeds: [1701, 20260927, 4294967291]
+  generated_sequences_per_critical_invariant: 10000
+  simulated_date_span:
+    start: "2000-01-01"
+    end: "2125-12-31"
+  event_volumes:
+    visits: 100000
+    invoice_attempts: 25000
+    restore_attempts: 5000
+    entitlement_events: 10000
+  data_growth_curve: "0 to PERF-LARGE-01 in 120 monthly steps, then 10 years of edit/issue/void/restore events."
+  state_oracles:
+    - "A visit has at most one active issued-invoice link."
+    - "A successful issued invoice has one readable canonical PDF with matching hash."
+    - "Issued snapshot fields never change after issue."
+    - "Invoice numbers are unique and the allocation counter never decreases."
+    - "Grand total equals rate subtotals plus once-per-rate rounded tax."
+    - "A failed or cancelled purchase never grants Pro or changes domain data."
+    - "A restore failure leaves the pre-restore database and files byte-for-byte intact."
+
+tool_thresholds:
+  compiler:
+    language_mode: "Swift 6"
+    strict_concurrency: complete
+    warnings_as_errors: true
+    xcode_policy: "Latest stable non-beta Xcode at implementation start; exact build recorded in candidate manifest."
+  dependencies:
+    runtime_allowlist:
+      - name: GRDB.swift
+        exact_version: "7.11.1"
+    package_resolved_committed: true
+    block_known_vulnerabilities: [critical, high]
+    license_scan_required: true
+    secret_scan_required: true
+  coverage:
+    critical_module_line_percent_min: 95
+    critical_branch_percent_min: 90
+    direct_test_for_every_critical_invariant: true
+  mutation:
+    critical_module_score_percent_min: 80
+    approved_alternative: "Scripted branch mutations that change each critical predicate and prove at least one linked test fails."
+  fuzz:
+    untrusted_parser_minutes_each_min: 30
+    deterministic_seed_required: true
+  sanitizers:
+    address: required_where_supported
+    undefined_behavior: required_where_supported
+    thread: required_where_supported
+
+requirements:
+  - id: REQ-PLAT-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "The production app shall install and complete the primary workflow on every iPhone running iOS 17.0 or later."
+    evidence: ["process-flow:primary-launch-customer", "apple:swiftui"]
+    risk: high
+    acceptance_test_ids: [T-PLATFORM-001]
+    dependencies: []
+  - id: REQ-LOC-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Localization
+    normative_text: "A new installation shall select Japanese as its in-app display language."
+    evidence: ["listing:japan-localization"]
+    risk: high
+    acceptance_test_ids: [T-LOCALE-001]
+    dependencies: [REQ-PLAT-001]
+  - id: REQ-LOC-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Localization
+    normative_text: "Selecting English in Display Language shall replace every currently visible localizable interface string before the next user action without restarting the process."
+    evidence: ["owner:english-control-layer", "apple:string-catalogs"]
+    risk: high
+    acceptance_test_ids: [T-LOCALE-001, T-LOCALE-002]
+    dependencies: [REQ-LOC-001]
+  - id: REQ-OFFLINE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Architecture
+    normative_text: "Recording visits, building, previewing, issuing, viewing and backing up invoices shall require no network connection or account."
+    evidence: ["process-flow:complaint-derived-8"]
+    risk: critical
+    acceptance_test_ids: [T-OFFLINE-001]
+    dependencies: []
+  - id: REQ-DATE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Each visit shall store its work date as Gregorian year, month and day independently of creation timestamp and device time zone."
+    evidence: ["process-flow:complaint-derived-1"]
+    risk: critical
+    acceptance_test_ids: [T-DATE-001]
+    dependencies: []
+  - id: REQ-MONEY-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Every persisted monetary amount shall be a checked Int64 count of whole yen and shall never be a binary floating-point value."
+    evidence: ["process-flow:data-calculation-model"]
+    risk: critical
+    acceptance_test_ids: [T-CALC-001, T-CALC-002]
+    dependencies: []
+  - id: REQ-QTY-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "A quantity shall be greater than zero, no greater than 999999.999 and contain at most three decimal places."
+    evidence: ["decision-register:quantity-contract"]
+    risk: high
+    acceptance_test_ids: [T-CALC-002]
+    dependencies: []
+  - id: REQ-LINE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "A line net amount shall equal exact decimal quantity multiplied by tax-exclusive unit-price yen and rounded to whole yen by the stored line-rounding rule."
+    evidence: ["decision-register:tax-exclusive"]
+    risk: critical
+    acceptance_test_ids: [T-CALC-001, T-CALC-002]
+    dependencies: [REQ-MONEY-001, REQ-QTY-001]
+  - id: REQ-TAX-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Invoice tax shall be calculated and rounded exactly once for each distinct tax rate after summing the whole-yen net values assigned to that rate."
+    evidence: ["nta:no-6371", "process-flow:complaint-derived-6"]
+    risk: critical
+    acceptance_test_ids: [T-CALC-001, T-PROPERTY-001]
+    dependencies: [REQ-LINE-001]
+  - id: REQ-TAX-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "The launch rate catalog shall offer 10%, 8% and 0% as versioned basis-point records."
+    evidence: ["process-flow:release-gate-5"]
+    risk: high
+    acceptance_test_ids: [T-CALC-001]
+    dependencies: [REQ-TAX-001]
+  - id: REQ-TOTAL-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "An invoice grand total shall equal the sum of every rate subtotal and its stored rounded tax amount and shall not exceed 9999999999999 yen."
+    evidence: ["decision-register:amount-bounds"]
+    risk: critical
+    acceptance_test_ids: [T-CALC-002, T-PROPERTY-001]
+    dependencies: [REQ-TAX-001]
+  - id: REQ-AUTOSAVE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "A valid visit or invoice-draft edit shall be persisted 250 milliseconds after the latest edit or immediately when the scene becomes inactive, whichever occurs first."
+    evidence: ["process-flow:complaint-derived-5"]
+    risk: high
+    acceptance_test_ids: [T-AUTOSAVE-001]
+    dependencies: []
+  - id: REQ-SELECT-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "An invoice draft shall accept individually selected unbilled visits for one customer from any valid historical dates, including non-consecutive dates."
+    evidence: ["process-flow:complaint-derived-2"]
+    risk: critical
+    acceptance_test_ids: [T-INVOICE-BUILD-001]
+    dependencies: [REQ-DATE-001]
+  - id: REQ-BILLING-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "A visit shall have at most one active issued-invoice link."
+    evidence: ["process-flow:complaint-derived-7"]
+    risk: critical
+    acceptance_test_ids: [T-ISSUE-001, T-PROPERTY-001]
+    dependencies: []
+  - id: REQ-SNAPSHOT-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "After issue, invoice issuer, recipient, lines, dates, sites, rates, rounding policies and calculated amounts shall be immutable."
+    evidence: ["process-flow:data-calculation-model"]
+    risk: critical
+    acceptance_test_ids: [T-IMMUTABLE-001, T-PROPERTY-001]
+    dependencies: []
+  - id: REQ-NUMBER-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Invoice numbers shall use YYYY-NNNN, remain unique and be allocated only inside a successful issue transaction."
+    evidence: ["decision-register:numbering"]
+    risk: critical
+    acceptance_test_ids: [T-NUMBER-001, T-ISSUE-001]
+    dependencies: []
+  - id: REQ-ISSUE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "Issue shall commit the invoice snapshot, source links, billed visit states, invoice number, free-allowance use and pending file-operation record in one immediate SQLite transaction."
+    evidence: ["process-flow:step-6"]
+    risk: critical
+    acceptance_test_ids: [T-ISSUE-001, T-RECOVERY-001]
+    dependencies: [REQ-BILLING-001, REQ-SNAPSHOT-001, REQ-NUMBER-001]
+  - id: REQ-ISSUE-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: PDF
+    normative_text: "A render or staged-file write failure before the issue transaction shall leave the invoice draft and source visit states unchanged."
+    evidence: ["process-flow:step-5"]
+    risk: critical
+    acceptance_test_ids: [T-RECOVERY-001]
+    dependencies: [REQ-ISSUE-001]
+  - id: REQ-RECOVERY-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "Startup recovery shall reconcile every incomplete file-operation journal row to a matching canonical PDF or a visible Needs Recovery invoice state without deleting its database snapshot."
+    evidence: ["decision-register:issue-protocol"]
+    risk: critical
+    acceptance_test_ids: [T-RECOVERY-001, T-PROPERTY-001]
+    dependencies: [REQ-ISSUE-001]
+  - id: REQ-SHARE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "Cancelling or failing the iOS share sheet after successful issue shall not change invoice, visit, PDF or allowance state."
+    evidence: ["process-flow:complaint-derived-7"]
+    risk: critical
+    acceptance_test_ids: [T-SHARE-001]
+    dependencies: [REQ-ISSUE-001]
+  - id: REQ-VOID-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Voiding an issued invoice shall preserve its snapshot and PDF and shall return its visits to Unbilled only after an explicit confirmation."
+    evidence: ["process-flow:step-7"]
+    risk: critical
+    acceptance_test_ids: [T-CORRECTION-001]
+    dependencies: [REQ-SNAPSHOT-001]
+  - id: REQ-CORRECT-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Domain
+    normative_text: "Correcting an issued invoice shall create a new invoice and reciprocal replacement links without changing the original snapshot or PDF."
+    evidence: ["process-flow:step-7"]
+    risk: critical
+    acceptance_test_ids: [T-CORRECTION-001]
+    dependencies: [REQ-SNAPSHOT-001]
+  - id: REQ-PDF-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: PDF
+    normative_text: "The PDF renderer shall produce A4 portrait pages of 595.28 by 841.89 points with 36-point margins."
+    evidence: ["process-flow:complaint-derived-3"]
+    risk: high
+    acceptance_test_ids: [T-PDF-001]
+    dependencies: []
+  - id: REQ-PDF-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: PDF
+    normative_text: "PDF body text shall remain at least 9 points and every glyph shall remain within the page margins."
+    evidence: ["process-flow:complaint-derived-3"]
+    risk: high
+    acceptance_test_ids: [T-PDF-001, T-PDF-002]
+    dependencies: [REQ-PDF-001]
+  - id: REQ-PDF-003
+    scope: LAUNCH
+    status: LOCKED
+    owner: PDF
+    normative_text: "An issued invoice preview, re-share and backup shall read the same stored canonical PDF bytes identified by the issued snapshot's SHA-256 hash."
+    evidence: ["process-flow:complaint-derived-4"]
+    risk: critical
+    acceptance_test_ids: [T-PDF-IDENTITY-001]
+    dependencies: [REQ-ISSUE-001]
+  - id: REQ-BACKUP-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Backup
+    normative_text: "Backup export shall remain available without Pro and shall include every domain record and canonical issued PDF present at the consistent export snapshot."
+    evidence: ["process-flow:step-8", "process-flow:free-boundary"]
+    risk: critical
+    acceptance_test_ids: [T-BACKUP-001]
+    dependencies: [REQ-PDF-003]
+  - id: REQ-BACKUP-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Backup
+    normative_text: "A backup manifest shall record schema version, app build, record counts, file byte counts and SHA-256 hashes."
+    evidence: ["decision-register:backup-package"]
+    risk: high
+    acceptance_test_ids: [T-BACKUP-001, T-BACKUP-HOSTILE-001]
+    dependencies: [REQ-BACKUP-001]
+  - id: REQ-RESTORE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Backup
+    normative_text: "Restore shall validate structure, hashes, schema compatibility, foreign keys and domain invariants in a temporary database before changing live data."
+    evidence: ["process-flow:step-8"]
+    risk: critical
+    acceptance_test_ids: [T-RESTORE-001, T-BACKUP-HOSTILE-001]
+    dependencies: [REQ-BACKUP-002]
+  - id: REQ-RESTORE-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Backup
+    normative_text: "A restore validation or commit failure shall leave the prior live database and canonical PDF files byte-for-byte unchanged."
+    evidence: ["process-flow:complaint-derived-5"]
+    risk: critical
+    acceptance_test_ids: [T-RESTORE-001, T-PROPERTY-001]
+    dependencies: [REQ-RESTORE-001]
+  - id: REQ-RESTORE-003
+    scope: LAUNCH
+    status: LOCKED
+    owner: Backup
+    normative_text: "Restore shall never grant, revoke or import the StoreKit Pro entitlement."
+    evidence: ["decision-register:entitlement-neutral-backup"]
+    risk: critical
+    acceptance_test_ids: [T-RESTORE-ENTITLEMENT-001]
+    dependencies: [REQ-RESTORE-001]
+  - id: REQ-FREE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "Without Pro, the app shall allow at most two active customers."
+    evidence: ["process-flow:free-boundary"]
+    risk: high
+    acceptance_test_ids: [T-GATE-001]
+    dependencies: []
+  - id: REQ-FREE-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "Without Pro, the app shall allow exactly one successful clean invoice issue across the retained data set."
+    evidence: ["process-flow:free-boundary"]
+    risk: critical
+    acceptance_test_ids: [T-GATE-002, T-PROPERTY-001]
+    dependencies: [REQ-ISSUE-001]
+  - id: REQ-PRO-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "A verified active non-consumable Pro entitlement shall remove the active-customer and clean-issue limits."
+    evidence: ["process-flow:paid-boundary"]
+    risk: critical
+    acceptance_test_ids: [T-STOREKIT-001]
+    dependencies: [REQ-FREE-001, REQ-FREE-002]
+  - id: REQ-GATE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "The purchase gate shall appear only when adding a third active customer or requesting a second clean issue without Pro."
+    evidence: ["process-flow:paid-boundary"]
+    risk: high
+    acceptance_test_ids: [T-GATE-001, T-GATE-002]
+    dependencies: [REQ-FREE-001, REQ-FREE-002]
+  - id: REQ-GATE-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "Purchase cancellation, pending state, failure or unverifiable result shall not change entitlement or domain data."
+    evidence: ["process-flow:complaint-derived-9"]
+    risk: critical
+    acceptance_test_ids: [T-STOREKIT-001, T-PROPERTY-001]
+    dependencies: [REQ-PRO-001]
+  - id: REQ-ACCESS-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "Loss or absence of Pro shall not block viewing, re-sharing or backing up existing records and issued PDFs."
+    evidence: ["process-flow:paid-gate-never-hostage"]
+    risk: critical
+    acceptance_test_ids: [T-STOREKIT-001, T-RESTORE-ENTITLEMENT-001]
+    dependencies: [REQ-PRO-001]
+  - id: REQ-STOREKIT-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Entitlements
+    normative_text: "The displayed Pro price shall come from the loaded StoreKit product and Restore Purchase shall call AppStore.sync only after the user selects that action."
+    evidence: ["apple:storekit-current-entitlements", "apple:appstore-sync"]
+    risk: high
+    acceptance_test_ids: [T-STOREKIT-001]
+    dependencies: []
+  - id: REQ-PRIVACY-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Compliance
+    normative_text: "The app shall send no customer, site, invoice, amount, bank or usage data to an analytics, advertising, logging or app-owned network endpoint."
+    evidence: ["privacy-policy:local-first", "process-flow:release-gate-10"]
+    risk: critical
+    acceptance_test_ids: [T-PRIVACY-001]
+    dependencies: [REQ-OFFLINE-001]
+  - id: REQ-PRIVACY-002
+    scope: LAUNCH
+    status: LOCKED
+    owner: Compliance
+    normative_text: "Every release archive shall contain a privacy manifest that matches the archive privacy report and declares every required-reason API used by the app and dependencies."
+    evidence: ["apple:privacy-manifests"]
+    risk: high
+    acceptance_test_ids: [T-PRIVACY-002]
+    dependencies: []
+  - id: REQ-MIGRATE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Persistence
+    normative_text: "Every released schema version shall have a tested forward migration path to the current schema without changing issued snapshot values or hashes."
+    evidence: ["architecture:grdb-migrations"]
+    risk: critical
+    acceptance_test_ids: [T-MIGRATION-001]
+    dependencies: [REQ-SNAPSHOT-001]
+  - id: REQ-PERF-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Performance
+    normative_text: "Every operation listed in performance_budgets shall meet its declared p95 time, memory or storage threshold under the declared environment."
+    evidence: ["process-flow:release-gate-1"]
+    risk: high
+    acceptance_test_ids: [T-PERFORMANCE-001]
+    dependencies: []
+  - id: REQ-SAMPLE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: AppShell
+    normative_text: "A store reviewer shall be able to load and reset a Japanese sample containing one customer, one site, three visits and one invoice draft without creating an account."
+    evidence: ["audit:unfamiliar-reviewer"]
+    risk: medium
+    acceptance_test_ids: [T-REVIEWER-001]
+    dependencies: [REQ-OFFLINE-001]
+  - id: REQ-RELEASE-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Delivery
+    normative_text: "A signed release tag shall run all mandatory gates, upload the resulting App Store build and configure automatic publication only after Apple approval."
+    evidence: ["owner:automatic-release", "apple:xcode-cloud-workflow"]
+    risk: high
+    acceptance_test_ids: [T-DELIVERY-001]
+    dependencies: [REQ-PRIVACY-002]
+  - id: REQ-QUALITY-001
+    scope: LAUNCH
+    status: LOCKED
+    owner: Quality
+    normative_text: "Release shall be blocked by any compiler warning, strict-concurrency warning, known critical/high dependency vulnerability or unresolved critical/high test finding."
+    evidence: ["engine-first:tool-thresholds"]
+    risk: critical
+    acceptance_test_ids: [T-QUALITY-001]
+    dependencies: []
+
+tests:
+  - id: T-PLATFORM-001
+    requirement_ids: [REQ-PLAT-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "Clean installation on the reference device."
+    actions: [install, launch, record_visit, build_preview, issue_free_invoice, export_backup]
+    expected_oracle: "Every action completes without crash and produces the declared records and file."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-LOCALE-001
+    requirement_ids: [REQ-LOC-001, REQ-LOC-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [LOCALE-SWITCH-01]
+    starting_state: "New install on an English-language device."
+    actions: [launch, assert_japanese, switch_to_english, inspect_all_visible_destinations, relaunch]
+    expected_oracle: "Japanese is initial; English replaces all current interface strings without restart and persists after relaunch."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-LOCALE-002
+    requirement_ids: [REQ-LOC-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [PDF-JA-LONG-01, PDF-EN-LONG-01]
+    starting_state: "String catalogs compiled for Japanese and English."
+    actions: [enumerate_keys, compare_placeholders, render_long_strings, run_accessibility_label_audit]
+    expected_oracle: "No missing key, fallback, placeholder mismatch, clipped required action or unlabeled control exists."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-OFFLINE-001
+    requirement_ids: [REQ-OFFLINE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "Airplane mode; no cached StoreKit product required for free flow."
+    actions: [record_visit, build_invoice, preview_pdf, issue_first_invoice, reopen_pdf, export_backup]
+    expected_oracle: "The complete free primary workflow succeeds and no account or permission prompt appears."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-DATE-001
+    requirement_ids: [REQ-DATE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [LOCALE-SWITCH-01]
+    starting_state: "Visits across daylight-saving, time-zone and year boundaries."
+    actions: [change_clock, change_timezone, relaunch, query_visits, render_invoice]
+    expected_oracle: "Every stored and rendered work date remains the originally entered Gregorian date."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-CALC-001
+    requirement_ids: [REQ-MONEY-001, REQ-LINE-001, REQ-TAX-001, REQ-TAX-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [CALC-MIXED-01]
+    starting_state: "Empty pure-domain test process."
+    actions: [calculate_each_fixed_vector, compare_rate_subtotals, compare_rounded_tax, repeat_100_times]
+    expected_oracle: "Every integer-yen result matches the reviewed fixture and repeated runs are identical."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-CALC-002
+    requirement_ids: [REQ-MONEY-001, REQ-QTY-001, REQ-LINE-001, REQ-TOTAL-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [CALC-BOUNDARY-01]
+    starting_state: "Empty pure-domain test process."
+    actions: [evaluate_each_boundary, attempt_overflow, attempt_invalid_scale, attempt_zero_quantity]
+    expected_oracle: "Valid boundaries return exact yen; invalid and overflow inputs return typed errors and persist nothing."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-PROPERTY-001
+    requirement_ids: [REQ-TAX-001, REQ-TOTAL-001, REQ-BILLING-001, REQ-SNAPSHOT-001, REQ-RECOVERY-001, REQ-RESTORE-002, REQ-FREE-002, REQ-GATE-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [CALC-MIXED-01, RECOVERY-ISSUE-01, STOREKIT-ALL-01]
+    starting_state: "Seeded generated domain and persistence states."
+    actions: [run_10000_sequences_per_invariant_for_each_seed]
+    expected_oracle: "Every state_oracle remains true after every generated event or the test records a reproducible seed and minimal counterexample."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-AUTOSAVE-001
+    requirement_ids: [REQ-AUTOSAVE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "Editable draft and fault-injecting clock/persistence adapter."
+    actions: [edit_valid_field, advance_249ms, assert_not_due, advance_1ms, assert_saved, edit_again, background_immediately, force_quit, relaunch]
+    expected_oracle: "The first edit persists at 250 ms and the second valid edit persists on background before termination."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-INVOICE-BUILD-001
+    requirement_ids: [REQ-SELECT-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "100 unbilled visits across historical non-consecutive dates."
+    actions: [select_customer, select_arbitrary_date_range, deselect_individual_visits, calculate_draft]
+    expected_oracle: "Only chosen unbilled visits for the customer appear, ordered by date then site, with correct totals."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-ISSUE-001
+    requirement_ids: [REQ-BILLING-001, REQ-NUMBER-001, REQ-ISSUE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "Valid draft and staged canonical PDF."
+    actions: [issue, query_snapshot, query_links, query_visit_states, query_allowance, retry_same_command]
+    expected_oracle: "Exactly one invoice/number/link set exists, all source visits are billed and retry creates no duplicate."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-IMMUTABLE-001
+    requirement_ids: [REQ-SNAPSHOT-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "One issued invoice."
+    actions: [edit_source_customer, edit_source_site, edit_source_template, attempt_snapshot_update, read_invoice]
+    expected_oracle: "Source edits succeed for future work; direct snapshot mutation is rejected; issued fields and hash are unchanged."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-NUMBER-001
+    requirement_ids: [REQ-NUMBER-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "Invoices around a Gregorian year boundary with injected failed and concurrent attempts."
+    actions: [issue_in_old_year, fail_next_issue, issue_again, issue_in_new_year, void, issue_again]
+    expected_oracle: "Successful numbers are unique, use the correct year, reset sequence by year and never reuse a committed number."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-RECOVERY-001
+    requirement_ids: [REQ-ISSUE-001, REQ-ISSUE-002, REQ-RECOVERY-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [RECOVERY-ISSUE-01]
+    starting_state: "One valid invoice draft for each issue protocol fault point."
+    actions: [inject_failure, terminate_process, relaunch, run_recovery, inspect_database_and_files]
+    expected_oracle: "Each case is either unchanged draft/unbilled state or one consistent invoice with valid PDF; no double billing or lost snapshot exists."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-SHARE-001
+    requirement_ids: [REQ-SHARE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "One newly issued free invoice with recorded hashes and states."
+    actions: [open_share_sheet, cancel, reopen_share_sheet, simulate_share_failure, compare_state]
+    expected_oracle: "Invoice, visits, PDF hash and free allowance are unchanged by cancellation or failure."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-CORRECTION-001
+    requirement_ids: [REQ-VOID-001, REQ-CORRECT-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [FLOW-100-01]
+    starting_state: "Issued and paid invoice variants."
+    actions: [void_without_confirmation, void_with_confirmation, issue_replacement, inspect_links_and_hashes]
+    expected_oracle: "Unconfirmed void changes nothing; confirmed void preserves original and returns visits; replacement is new and reciprocally linked."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-PDF-001
+    requirement_ids: [REQ-PDF-001, REQ-PDF-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [PDF-JA-LONG-01]
+    starting_state: "Immutable Japanese invoice snapshot."
+    actions: [create_layout_plan, render_pdf, inspect_media_boxes, inspect_glyph_bounds, extract_text]
+    expected_oracle: "All pages are A4, margins and 9-point minimum hold, all expected text exists and totals are correct."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-PDF-002
+    requirement_ids: [REQ-PDF-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [PDF-EN-LONG-01]
+    starting_state: "Immutable invoice snapshot with maximum approved text expansion."
+    actions: [render_pdf, rasterize_pages, compare_geometry_and_overflow_oracles]
+    expected_oracle: "No clipped, overlapping or out-of-margin glyph exists and totals remain grouped correctly."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-PDF-IDENTITY-001
+    requirement_ids: [REQ-PDF-003]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [PDF-JA-LONG-01]
+    starting_state: "One issued invoice and recorded canonical SHA-256."
+    actions: [load_preview_data, load_reshare_data, export_backup, read_backup_pdf, hash_each]
+    expected_oracle: "All four SHA-256 values equal the issued snapshot hash."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-BACKUP-001
+    requirement_ids: [REQ-BACKUP-001, REQ-BACKUP-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [BACKUP-CLEAN-01]
+    starting_state: "Free-used data set with drafts, issued, paid, voided and corrected invoices."
+    actions: [export_without_pro, enumerate_package, verify_counts, verify_sizes, verify_hashes]
+    expected_oracle: "Package is complete, hashes/counts match and no Pro entitlement value is present."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-BACKUP-HOSTILE-001
+    requirement_ids: [REQ-BACKUP-002, REQ-RESTORE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [BACKUP-HOSTILE-01]
+    starting_state: "Known live database and files, with one hostile package per variant."
+    actions: [attempt_preflight_for_each_variant, inspect_live_hashes]
+    expected_oracle: "Every hostile package is rejected with a typed error before live hashes change."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-RESTORE-001
+    requirement_ids: [REQ-RESTORE-001, REQ-RESTORE-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [BACKUP-CLEAN-01, MIGRATION-ALL-01]
+    starting_state: "Clean device and populated-device variants."
+    actions: [preflight, restore_replace, verify, reset, preflight, restore_merge, inject_commit_failure]
+    expected_oracle: "Valid replace/merge satisfies all counts and hashes; injected failure preserves the original live data byte-for-byte."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-RESTORE-ENTITLEMENT-001
+    requirement_ids: [REQ-RESTORE-003, REQ-ACCESS-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [BACKUP-CLEAN-01, STOREKIT-ALL-01]
+    starting_state: "Cross-product of free, Pro and revoked device states with free/Pro-origin backups."
+    actions: [restore_each_backup, refresh_current_entitlements, inspect_access_and_limits]
+    expected_oracle: "Device StoreKit state is unchanged by archive origin; existing restored records remain viewable/exportable in every state."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-GATE-001
+    requirement_ids: [REQ-FREE-001, REQ-GATE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [STOREKIT-ALL-01]
+    starting_state: "Free user with zero, one, two and two-plus-one-deactivated customers."
+    actions: [add_customer_in_each_state, reactivate_customer]
+    expected_oracle: "First and second active customers succeed; third active add/reactivation presents the gate; deactivated rows do not count."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-GATE-002
+    requirement_ids: [REQ-FREE-002, REQ-GATE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [STOREKIT-ALL-01]
+    starting_state: "Free user before and after one successful clean invoice issue."
+    actions: [preview_many_times, issue_first, cancel_share, void_first, attempt_second_issue]
+    expected_oracle: "Preview is never gated; exactly the first clean issue succeeds; later issue is gated despite share cancellation or void."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-STOREKIT-001
+    requirement_ids: [REQ-PRO-001, REQ-GATE-002, REQ-ACCESS-001, REQ-STOREKIT-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [STOREKIT-ALL-01]
+    starting_state: "One isolated StoreKit test session per transaction state."
+    actions: [load_product, assert_display_price, purchase_or_cancel_or_pend_or_fail, observe_updates, restore_explicitly, revoke, inspect_domain]
+    expected_oracle: "Only verified active entitlement grants Pro; store price is used; sync follows explicit restore; every non-success leaves records unchanged and accessible."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-PRIVACY-001
+    requirement_ids: [REQ-PRIVACY-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "Network capture active and OSLog store empty."
+    actions: [execute_full_workflow, inspect_connections, inspect_logs_for_fixture_values]
+    expected_oracle: "No app-owned endpoint connection occurs and no protected fixture value appears in logs."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-PRIVACY-002
+    requirement_ids: [REQ-PRIVACY-002]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: []
+    starting_state: "Release archive and generated Xcode privacy report."
+    actions: [parse_manifest, parse_report, scan_dependency_apis, compare_declarations]
+    expected_oracle: "Manifest and report agree and every used required-reason API has an approved declared reason."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-MIGRATION-001
+    requirement_ids: [REQ-MIGRATE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [MIGRATION-ALL-01]
+    starting_state: "One immutable copy of every historical schema fixture."
+    actions: [migrate_each_to_current, run_foreign_key_check, run_invariant_check, compare_snapshot_fields_and_hashes]
+    expected_oracle: "Every supported version reaches current schema and all issued values/hashes remain equal to fixture expectations."
+    severity_on_failure: critical
+    automation_status: planned
+  - id: T-PERFORMANCE-001
+    requirement_ids: [REQ-PERF-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [PERF-LARGE-01]
+    starting_state: "Release build on reference device after one warm-up."
+    actions: [run_each_budget_operation_20_times, collect_time_memory_storage, calculate_p95]
+    expected_oracle: "Every measured value is at or below its declared performance_budgets threshold."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-REVIEWER-001
+    requirement_ids: [REQ-SAMPLE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: [REVIEWER-SAMPLE-01]
+    starting_state: "Clean installation with no account."
+    actions: [load_sample, inspect_work, preview_invoice, reset_sample]
+    expected_oracle: "Declared sample appears, is usable through preview and reset removes/recreates only sample-owned records."
+    severity_on_failure: medium
+    automation_status: planned
+  - id: T-DELIVERY-001
+    requirement_ids: [REQ-RELEASE-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: []
+    starting_state: "Signed disposable release tag in a non-production delivery rehearsal."
+    actions: [trigger_xcode_cloud, run_gates, archive, upload_test_build, inspect_release_configuration]
+    expected_oracle: "One traceable build is archived/uploaded only after gates pass and its release mode is automatic after approval."
+    severity_on_failure: high
+    automation_status: planned
+  - id: T-QUALITY-001
+    requirement_ids: [REQ-QUALITY-001]
+    platform_matrix: [ios17_iphone]
+    fixture_ids: []
+    starting_state: "Baseline clean build, then injected warning and mock critical dependency finding."
+    actions: [build_baseline, inject_warning, assert_failure, inject_vulnerability_result, assert_failure]
+    expected_oracle: "Baseline can pass; each blocking condition makes the release workflow fail."
+    severity_on_failure: critical
+    automation_status: planned
+
+unresolved_decisions: []
+
+excluded_scope:
+  - estimates_and_proposals
+  - scheduling_and_routes
+  - team_accounts_payroll_attendance
+  - payment_processing_and_bank_reconciliation
+  - fax_postal_fulfillment_esigning
+  - ai_ocr_receipt_capture
+  - construction_photos_and_public_works_reporting
+  - cloud_accounts_and_automatic_sync
+  - tax_or_legal_advice
+  - ipad_mac_web_and_android_clients
+
