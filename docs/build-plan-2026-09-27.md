@@ -7,7 +7,7 @@
 
 ## Executive decision
 
-Build a native, iPhone-only, offline-first app in SwiftUI. Keep all invoice rules in a presentation-independent Swift package, persist operational data in SQLite through GRDB, generate canonical A4 PDFs with `UIGraphicsPDFRenderer`, preview those exact bytes with PDFKit, and sell one lifetime Pro entitlement through StoreKit 2.
+Build a native, iPhone-only, offline-first app in SwiftUI. Use the iOS 18 `TabView` APIs as the root shell and `NavigationSplitView` for list/detail workflows, collapsing naturally to one column on compact iPhone widths. Keep all invoice rules in a presentation-independent Swift package, persist operational data in SQLite through GRDB, generate canonical A4 PDFs with `UIGraphicsPDFRenderer`, preview those exact bytes with PDFKit, and sell one lifetime Pro entitlement through StoreKit 2.
 
 The implementation must be engine-first:
 
@@ -28,8 +28,8 @@ This architecture directly protects the product promise: several completed servi
 | --- | --- | --- |
 | Product | 日付別請求書・作業明細 / Dated Service Invoice | Search-led Japanese name already selected. |
 | Platform | iPhone App Store | The validated launch scope is iPhone, not iPad, Mac or web. |
-| Minimum OS | iOS 17.0 | Supports the intended devices and modern SwiftUI/StoreKit APIs without widening the compatibility surface. |
-| Reference device | iPhone SE (2nd generation), iOS 17 | Smallest supported viewport and a conservative performance device. |
+| Minimum OS | iOS 18.0 | The shell intentionally uses the iOS 18 `Tab` APIs and adaptable tab-view behavior. |
+| Reference device | iPhone SE (2nd generation), iOS 18 | Smallest supported viewport and the owner's physical test device class. |
 | Language | Japanese by default; English selectable inside Settings | Japanese is the customer interface. English is the owner's control layer. |
 | Data location | Local application container | No account, server, background sync or required connection. |
 | Monetization | One non-consumable lifetime Pro purchase | No subscription, ads or paid data access. |
@@ -43,6 +43,10 @@ Use the latest stable, non-beta Xcode available when implementation starts. Reco
 ### Application and concurrency
 
 - **SwiftUI** for the production shell and navigation.
+- Root shell: `TabView` using the iOS 18 `Tab` initializer with exactly **作業 / Work**, **請求書 / Invoices**, and **設定 / Settings** as persistent destinations.
+- Apply `.tabViewStyle(.sidebarAdaptable)` so iPhone receives the native tab-bar presentation while the hierarchy remains structurally ready for a future regular-width device target. iPad remains outside the launch support matrix.
+- Each data-heavy tab owns a selection-driven `NavigationSplitView`: ledger or invoice list in the leading column and the selected record/workflow in detail. On the iPhone SE compact width, it must collapse to one navigable column without a duplicate header, orphaned detail, or lost selection.
+- Sheets remain reserved for short modal jobs such as customer/site editing, filters, purchase, restore confirmation and system sharing; they do not replace primary navigation.
 - **Swift 6** strict concurrency.
 - One app-owned persistence actor. Views and view models never execute SQL or calculate invoice totals.
 - Unidirectional feature actions: a screen sends a command, the engine validates it, persistence commits it, and the screen observes the resulting state.
@@ -547,7 +551,7 @@ Automation stops on any failed gate. Apple review itself cannot be bypassed; “
 
 ### Phase 7 — Production interface
 
-Begins only after separate authorization. Build the already-locked six-screen SwiftUI shell over the engine, then validate real-device navigation, VoiceOver, Dynamic Type, tap/time budgets and storefront screenshots. UI code must not reimplement tax, state, entitlement or persistence rules.
+Begins only after separate authorization. Build the already-locked six-screen SwiftUI shell over the engine using the iOS 18 `TabView` plus selection-driven `NavigationSplitView`, then validate compact-column collapse, real-device navigation, VoiceOver, Dynamic Type, tap/time budgets and storefront screenshots. UI code must not reimplement tax, state, entitlement or persistence rules.
 
 ## Preimplementation audit result
 
@@ -563,6 +567,7 @@ The first launch must include resettable Japanese sample data. Without account c
 
 | Question | Decision |
 | --- | --- |
+| Navigation shell? | iOS 18 `TabView` with three persistent tabs; `NavigationSplitView` inside list/detail workflows and compact-column collapse on iPhone. |
 | SwiftData or explicit SQLite? | GRDB/SQLite. |
 | Tax-inclusive or tax-exclusive entry? | Tax-exclusive launch input. |
 | Per-line or per-rate tax rounding? | Once per invoice per rate. |
@@ -577,6 +582,9 @@ No launch-critical implementation decision remains blocked. `READY TO IMPLEMENT`
 ## Primary implementation references
 
 - Apple, [UIGraphicsPDFRenderer](https://developer.apple.com/documentation/uikit/uigraphicspdfrenderer)
+- Apple, [Enhancing app content with tab navigation](https://developer.apple.com/documentation/swiftui/enhancing-your-app-content-with-tab-navigation)
+- Apple, [`sidebarAdaptable` tab-view style](https://developer.apple.com/documentation/swiftui/tabviewstyle/sidebaradaptable)
+- Apple, [Robust navigation with stacks and split views](https://developer.apple.com/documentation/swiftui/bringing-robust-navigation-structure-to-your-swiftui-app)
 - Apple, [FileDocument](https://developer.apple.com/documentation/swiftui/filedocument)
 - Apple, [StoreKit current entitlements](https://developer.apple.com/documentation/storekit/transaction/currententitlements)
 - Apple, [StoreKit transaction updates](https://developer.apple.com/documentation/storekit/transaction/updates)
@@ -587,4 +595,3 @@ No launch-critical implementation decision remains blocked. `READY TO IMPLEMENT`
 - GRDB, [repository and documentation](https://github.com/groue/GRDB.swift)
 - National Tax Agency, [No.6371: Rounding fractions of consumption tax](https://www.nta.go.jp/taxes/shiraberu/taxanswer/shohi/6371.htm)
 - National Tax Agency, [Qualified invoice system Q&A](https://www.nta.go.jp/publication/pamph/shohi/kaisei/qa.htm)
-
