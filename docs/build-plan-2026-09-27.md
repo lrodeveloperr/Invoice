@@ -7,7 +7,7 @@
 
 ## Executive decision
 
-Build a native, iPhone-only, offline-first app in SwiftUI. Use the iOS 18 `TabView` APIs as the root shell and `NavigationSplitView` for list/detail workflows, collapsing naturally to one column on compact iPhone widths. Keep all invoice rules in a presentation-independent Swift package, persist operational data in SQLite through GRDB, generate canonical A4 PDFs with `UIGraphicsPDFRenderer`, preview those exact bytes with PDFKit, and sell one lifetime Pro entitlement through StoreKit 2.
+Build a native, universal iPhone-and-iPad, offline-first app in SwiftUI. Use the iOS/iPadOS 18 `TabView` APIs as the root shell and `NavigationSplitView` for list/detail workflows: one-column navigation on compact iPhone widths and persistent list/detail presentation on regular-width iPad. Keep all invoice rules in a presentation-independent Swift package, persist operational data in SQLite through GRDB, generate canonical A4 PDFs with `UIGraphicsPDFRenderer`, preview those exact bytes with PDFKit, and sell one lifetime Pro entitlement through StoreKit 2.
 
 The implementation must be engine-first:
 
@@ -27,9 +27,9 @@ This architecture directly protects the product promise: several completed servi
 | Decision | Locked choice | Reason |
 | --- | --- | --- |
 | Product | 日付別請求書・作業明細 / Dated Service Invoice | Search-led Japanese name already selected. |
-| Platform | iPhone App Store | The validated launch scope is iPhone, not iPad, Mac or web. |
-| Minimum OS | iOS 18.0 | The shell intentionally uses the iOS 18 `Tab` APIs and adaptable tab-view behavior. |
-| Reference device | iPhone SE (2nd generation), iOS 18 | Smallest supported viewport and the owner's physical test device class. |
+| Platform | Universal iPhone and iPad App Store binary | The launch scope includes iPhone and iPad; Mac, Vision Pro, web and Android remain excluded. |
+| Minimum OS | iOS 18.0 and iPadOS 18.0 | The shell intentionally uses the version 18 `Tab` APIs and adaptable tab-view behavior. |
+| Reference devices | iPhone SE (2nd generation), iOS 18; iPad mini (6th generation), iPadOS 18 | The iPhone is the compact-width floor; the iPad is the smallest supported tablet layout reference. |
 | Language | Japanese by default; English selectable inside Settings | Japanese is the customer interface. English is the owner's control layer. |
 | Data location | Local application container | No account, server, background sync or required connection. |
 | Monetization | One non-consumable lifetime Pro purchase | No subscription, ads or paid data access. |
@@ -43,9 +43,10 @@ Use the latest stable, non-beta Xcode available when implementation starts. Reco
 ### Application and concurrency
 
 - **SwiftUI** for the production shell and navigation.
+- **WorksBien skinning standard:** iOS/iPadOS 18 `TabView` plus adaptive `NavigationSplitView` is the default shell for this and future iOS apps unless a product-specific workflow requires a documented exception.
 - Root shell: `TabView` using the iOS 18 `Tab` initializer with exactly **作業 / Work**, **請求書 / Invoices**, and **設定 / Settings** as persistent destinations.
-- Apply `.tabViewStyle(.sidebarAdaptable)` so iPhone receives the native tab-bar presentation while the hierarchy remains structurally ready for a future regular-width device target. iPad remains outside the launch support matrix.
-- Each data-heavy tab owns a selection-driven `NavigationSplitView`: ledger or invoice list in the leading column and the selected record/workflow in detail. On the iPhone SE compact width, it must collapse to one navigable column without a duplicate header, orphaned detail, or lost selection.
+- Apply `.tabViewStyle(.sidebarAdaptable)` so iPhone receives the native tab-bar presentation while iPad can use the adaptable top-tab/sidebar presentation.
+- Each data-heavy tab owns a selection-driven `NavigationSplitView`: ledger or invoice list in the leading column and the selected record/workflow in detail. On the iPhone SE compact width, it must collapse to one navigable column without a duplicate header, orphaned detail, or lost selection. On regular-width iPad, it must retain the list and selected detail simultaneously and preserve selection through rotation, resizing and tab changes.
 - Sheets remain reserved for short modal jobs such as customer/site editing, filters, purchase, restore confirmation and system sharing; they do not replace primary navigation.
 - **Swift 6** strict concurrency.
 - One app-owned persistence actor. Views and view models never execute SQL or calculate invoice totals.
@@ -402,7 +403,7 @@ StoreKit tests use an Xcode `.storekit` configuration locally, automated StoreKi
 
 ## Performance and scale budgets
 
-All percentile targets are measured in Release configuration on an iPhone SE (2nd generation) running the oldest supported iOS, after one warm-up run. Dataset `PERF-LARGE-01` contains 10,000 visits, 30,000 visit lines, 1,000 issued invoices and 1,000 PDFs.
+All percentile targets are measured in Release configuration on an iPhone SE (2nd generation) running iOS 18 and an iPad mini (6th generation) running iPadOS 18, after one warm-up run per device. Both devices must pass. Dataset `PERF-LARGE-01` contains 10,000 visits, 30,000 visit lines, 1,000 issued invoices and 1,000 PDFs.
 
 | Operation | Target |
 | --- | --- |
@@ -472,7 +473,7 @@ Use Xcode Cloud because it combines Apple signing, testing, TestFlight and App S
 
 3. **Release — App Store**
    - trigger: signed Git tag `release/<marketing-version>`;
-   - require the manifest gate, full suite, privacy report, App Store metadata validation and screenshot presence;
+   - require the manifest gate, full suite, privacy report, App Store metadata validation and both required iPhone and iPad screenshot sets;
    - archive with a monotonically increasing build number;
    - upload an App Store-eligible build;
    - submit through App Store Connect automation after required metadata and compliance answers validate;
@@ -551,7 +552,7 @@ Automation stops on any failed gate. Apple review itself cannot be bypassed; “
 
 ### Phase 7 — Production interface
 
-Begins only after separate authorization. Build the already-locked six-screen SwiftUI shell over the engine using the iOS 18 `TabView` plus selection-driven `NavigationSplitView`, then validate compact-column collapse, real-device navigation, VoiceOver, Dynamic Type, tap/time budgets and storefront screenshots. UI code must not reimplement tax, state, entitlement or persistence rules.
+Begins only after separate authorization. Build the already-locked six-screen SwiftUI shell over the engine using the iOS/iPadOS 18 `TabView` plus selection-driven `NavigationSplitView`, then validate iPhone compact-column collapse, iPad regular-width list/detail behavior, rotation and resizing, real-device navigation, VoiceOver, Dynamic Type, tap/time budgets and both storefront screenshot sets. UI code must not reimplement tax, state, entitlement or persistence rules.
 
 ## Preimplementation audit result
 
@@ -567,7 +568,7 @@ The first launch must include resettable Japanese sample data. Without account c
 
 | Question | Decision |
 | --- | --- |
-| Navigation shell? | iOS 18 `TabView` with three persistent tabs; `NavigationSplitView` inside list/detail workflows and compact-column collapse on iPhone. |
+| Navigation shell? | iOS/iPadOS 18 `TabView` with three persistent tabs; `NavigationSplitView` collapses on iPhone and remains list/detail on regular-width iPad. |
 | SwiftData or explicit SQLite? | GRDB/SQLite. |
 | Tax-inclusive or tax-exclusive entry? | Tax-exclusive launch input. |
 | Per-line or per-rate tax rounding? | Once per invoice per rate. |
