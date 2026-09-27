@@ -1,4 +1,4 @@
-# Invoice — Japan iPhone app package
+# Invoice — Japan iPhone and iPad app package
 
 This repository contains the product specification, finalized App Store listing pack, and deterministic App Store screenshot-shell tooling for the Japan-first dated-service invoice app.
 
@@ -6,11 +6,12 @@ This repository contains the product specification, finalized App Store listing 
 
 - Japanese name: **請求書作成・作業記録｜清掃・修理・メンテナンス**
 - English equivalent: **Invoice Maker & Work Log | Cleaning, Repair & Maintenance**
-- Platform: iPhone
+- Platform: iPhone and iPad
 - Launch storefront: Japan
 - Default language: Japanese
 - Optional in-app control language: English via **設定 → 表示言語 → English** (Settings → Display Language → English)
 - Monetization: free download with one non-consumable **買い切りPro** (Lifetime Pro) purchase
+- WorksBien skinning standard: iOS/iPadOS 18 `TabView` plus adaptive `NavigationSplitView`; compact tab/navigation flow on iPhone and regular-width list/detail on iPad.
 
 ## Repository structure
 
@@ -21,6 +22,8 @@ This repository contains the product specification, finalized App Store listing 
 - `marketing/screenshots/ja-JP/iphone-6.9/shells/` — three 1320 × 2868 Japanese screenshot shells.
 - `marketing/screenshots/ja-JP/iphone-6.9/contact-sheet.png` — thumbnail review sheet.
 - `marketing/screenshots/ja-JP/iphone-6.9/manifest.json` — captions, geometry, output properties, and hashes.
+
+The current shell renderer contains the iPhone set. The locked media plan also requires three 13-inch iPad landscape shells at 2752 × 2064 px; those remain a later media task and are not part of this planning-only change.
 
 ## Screenshot captions
 
