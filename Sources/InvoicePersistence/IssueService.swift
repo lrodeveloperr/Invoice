@@ -76,8 +76,8 @@ public actor IssueService {
     public func recoverPendingFileOperations() async throws {
         let operations = try await database.pendingFileOperations()
         for operation in operations {
-            let stagedURL = filesRoot.appendingPathComponent(operation.stagedPath)
-            let finalURL = filesRoot.appendingPathComponent(operation.finalPath)
+            let stagedURL = try recoveryURL(relativePath: operation.stagedPath, directory: "Staging")
+            let finalURL = try recoveryURL(relativePath: operation.finalPath, directory: "Invoices")
             if try matchesHash(url: finalURL, expected: operation.sha256) {
                 try await database.completeFileOperation(operation.id)
             } else if try matchesHash(url: stagedURL, expected: operation.sha256) {
@@ -105,5 +105,21 @@ public actor IssueService {
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])
         let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         return actual == expected
+    }
+
+    private func recoveryURL(relativePath: String, directory: String) throws -> URL {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              components.first == Substring(directory),
+              components.last?.isEmpty == false,
+              relativePath.lowercased().hasSuffix(".pdf") else {
+            throw InvoiceError.corruptData("unsafe_recovery_path")
+        }
+        let root = filesRoot.appendingPathComponent(directory, isDirectory: true).standardizedFileURL
+        let url = filesRoot.appendingPathComponent(relativePath).standardizedFileURL
+        guard url.deletingLastPathComponent() == root else {
+            throw InvoiceError.corruptData("unsafe_recovery_path")
+        }
+        return url
     }
 }

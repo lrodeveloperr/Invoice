@@ -257,6 +257,84 @@ final class InvoicePersistenceTests: XCTestCase {
         }
     }
 
+    func testBackupValidationRejectsUnsafeRecoveryJournalPaths() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let package = root.appendingPathComponent("UnsafeJournal.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        let hostile = try DatabaseQueue(path: package.appendingPathComponent("data.sqlite").path)
+        let pdfRelativePath = try XCTUnwrap(invoice.pdfRelativePath)
+        let pdfHash = try XCTUnwrap(invoice.pdfSHA256)
+        try await hostile.write { db in
+            try db.execute(sql: """
+                INSERT INTO file_operation_journal(
+                    id, invoice_id, staged_path, final_path, sha256, state, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """, arguments: [
+                    UUID().uuidString.lowercased(),
+                    invoice.id.uuidString.lowercased(),
+                    pdfRelativePath,
+                    "../escaped.pdf",
+                    pdfHash,
+                    Date().timeIntervalSince1970
+                ])
+        }
+        try hostile.close()
+        try refreshDatabaseManifestHash(package: package)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await backup.validate(packageURL: package)
+        }
+    }
+
+    func testExactRollbackRestoresSequenceWithoutForwardRestorePolicy() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { invoice in
+            Data("pdf-\(invoice.number)".utf8)
+        }
+        _ = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let rollbackDatabase = root.appendingPathComponent("rollback.sqlite")
+        try await database.exportDatabase(to: rollbackDatabase.path)
+
+        var secondVisit = fixture.visit
+        secondVisit.id = UUID()
+        secondVisit.workDate = try LocalDate(year: 2026, month: 9, day: 12)
+        try await database.saveVisit(secondVisit)
+        let secondDraft = InvoiceDraft(
+            customerID: fixture.customer.id,
+            selectedVisitIDs: [secondVisit.id],
+            coveredStart: try LocalDate(year: 2026, month: 9, day: 1),
+            coveredEnd: try LocalDate(year: 2026, month: 9, day: 30),
+            issueDate: try LocalDate(year: 2026, month: 9, day: 30),
+            dueDate: try LocalDate(year: 2026, month: 10, day: 31)
+        )
+        _ = try await service.issue(
+            draft: secondDraft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [secondVisit], hasPro: true
+        )
+        try await database.replaceContentsExactly(from: rollbackDatabase.path)
+        let next = try await database.proposedNumber(
+            issueDate: try LocalDate(year: 2026, month: 9, day: 30),
+            prefix: ""
+        )
+        XCTAssertEqual(next, "2026-0002")
+    }
+
     func testBackupReplaceAndMergePreflight() async throws {
         let sourceRoot = try temporaryDirectory()
         let targetRoot = try temporaryDirectory()

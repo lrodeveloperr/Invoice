@@ -178,7 +178,7 @@ public actor BackupService {
         } else {
             mergeReport = nil
         }
-        let pdfCounts = try inspectPDFs(packageURL: packageURL, manifest: manifest, mode: mode)
+        let pdfCounts = try inspectPDFs(packageURL: packageURL, manifest: manifest)
         return RestoreReport(mode: mode, databaseMerge: mergeReport, pdfsAdded: pdfCounts.added, pdfsReused: pdfCounts.reused)
     }
 
@@ -202,19 +202,23 @@ public actor BackupService {
         }
 
         do {
+            let manifest = try validate(packageURL: incomingPackage)
+            try materializeIncomingPDFs(packageURL: incomingPackage, manifest: manifest)
             let incomingDatabase = incomingPackage.appendingPathComponent("data.sqlite").path
             let committedMerge: DatabaseMergeReport?
             switch mode {
             case .replace:
                 try await database.replaceContents(from: incomingDatabase)
                 committedMerge = nil
-                try replaceInvoiceDirectory(from: incomingPackage.appendingPathComponent("pdfs", isDirectory: true))
+                try pruneObsoletePDFs(keeping: Set(manifest.files.compactMap { record in
+                    guard record.relativePath.hasPrefix("pdfs/") else { return nil }
+                    return URL(fileURLWithPath: record.relativePath).lastPathComponent
+                }))
             case .merge:
                 committedMerge = try await database.mergeContents(from: incomingDatabase)
                 guard committedMerge?.canCommit == true else {
                     throw InvoiceError.corruptData("merge_conflict")
                 }
-                try mergeInvoiceDirectory(from: incomingPackage.appendingPathComponent("pdfs", isDirectory: true))
             }
             try await database.integrityCheck()
             return RestoreReport(
@@ -224,8 +228,8 @@ public actor BackupService {
                 pdfsReused: preflight.pdfsReused
             )
         } catch {
-            try? await database.replaceContents(from: rollbackDatabase.path)
-            try? replaceInvoiceDirectory(from: rollbackInvoices)
+            try? await database.replaceContentsExactly(from: rollbackDatabase.path)
+            try? restoreInvoiceDirectorySnapshot(from: rollbackInvoices)
             throw error
         }
     }
@@ -241,50 +245,75 @@ public actor BackupService {
         return result
     }
 
-    private func inspectPDFs(packageURL: URL, manifest: BackupManifest, mode: RestoreMode) throws -> (added: Int, reused: Int) {
+    private func inspectPDFs(packageURL: URL, manifest: BackupManifest) throws -> (added: Int, reused: Int) {
         let liveInvoices = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
         var added = 0
         var reused = 0
         for record in manifest.files where record.relativePath.hasPrefix("pdfs/") {
             let filename = URL(fileURLWithPath: record.relativePath).lastPathComponent
             let destination = liveInvoices.appendingPathComponent(filename)
-            guard mode == .merge, fileManager.fileExists(atPath: destination.path) else {
+            guard fileManager.fileExists(atPath: destination.path) else {
                 added += 1
                 continue
             }
             let data = try Data(contentsOf: destination, options: [.mappedIfSafe])
             guard sha256(data) == record.sha256 else {
-                throw InvoiceError.corruptData("pdf_merge_conflict_\(filename)")
+                throw InvoiceError.corruptData("pdf_restore_conflict_\(filename)")
             }
             reused += 1
         }
         return (added, reused)
     }
 
-    private func replaceInvoiceDirectory(from source: URL) throws {
+    private func materializeIncomingPDFs(packageURL: URL, manifest: BackupManifest) throws {
+        let source = packageURL.appendingPathComponent("pdfs", isDirectory: true)
+        let destination = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        for record in manifest.files.sorted(by: { $0.relativePath < $1.relativePath })
+        where record.relativePath.hasPrefix("pdfs/") {
+            let filename = URL(fileURLWithPath: record.relativePath).lastPathComponent
+            let incoming = source.appendingPathComponent(filename)
+            let target = destination.appendingPathComponent(filename)
+            let data = try Data(contentsOf: incoming, options: [.mappedIfSafe])
+            guard sha256(data) == record.sha256 else {
+                throw InvoiceError.corruptData("incoming_pdf_hash_changed")
+            }
+            if fileManager.fileExists(atPath: target.path) {
+                let existing = try Data(contentsOf: target, options: [.mappedIfSafe])
+                guard sha256(existing) == record.sha256 else {
+                    throw InvoiceError.corruptData("pdf_restore_conflict_\(filename)")
+                }
+            } else {
+                try data.write(to: target, options: [.atomic, .completeFileProtection])
+            }
+        }
+    }
+
+    private func pruneObsoletePDFs(keeping filenames: Set<String>) throws {
+        let directory = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        for file in try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        ) {
+            let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true,
+                  values.isSymbolicLink != true,
+                  file.pathExtension.lowercased() == "pdf",
+                  !filenames.contains(file.lastPathComponent) else { continue }
+            try fileManager.removeItem(at: file)
+        }
+    }
+
+    private func restoreInvoiceDirectorySnapshot(from source: URL) throws {
         let destination = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        guard fileManager.fileExists(atPath: source.path) else { return }
-        for file in try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: [.isRegularFileKey]) {
-            let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true,
-                  file.pathExtension.lowercased() == "pdf" else { continue }
-            try fileManager.copyItem(at: file, to: destination.appendingPathComponent(file.lastPathComponent))
-        }
-    }
-
-    private func mergeInvoiceDirectory(from source: URL) throws {
-        let destination = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        guard fileManager.fileExists(atPath: source.path) else { return }
-        for file in try fileManager.contentsOfDirectory(at: source, includingPropertiesForKeys: [.isRegularFileKey]) {
-            let target = destination.appendingPathComponent(file.lastPathComponent)
-            if !fileManager.fileExists(atPath: target.path) {
-                try fileManager.copyItem(at: file, to: target)
-            }
+        if fileManager.fileExists(atPath: source.path) {
+            try fileManager.copyItem(at: source, to: destination)
+        } else {
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
         }
     }
 

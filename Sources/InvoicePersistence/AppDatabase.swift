@@ -637,6 +637,14 @@ public actor AppDatabase {
         try integrityCheck()
     }
 
+    public func replaceContentsExactly(from sourcePath: String) throws {
+        try Self.validateDatabaseFile(at: sourcePath)
+        let source = try DatabaseQueue(path: sourcePath)
+        try source.backup(to: writer)
+        try Self.migrator.migrate(writer)
+        try integrityCheck()
+    }
+
     public func mergeContents(from sourcePath: String, dryRun: Bool = false) throws -> DatabaseMergeReport {
         try Self.validateDatabaseFile(at: sourcePath)
         return try writer.write { db in
@@ -775,6 +783,39 @@ public actor AppDatabase {
                 guard exists == 1 else {
                     throw InvoiceError.corruptData("missing_invariant_trigger_\(trigger)")
                 }
+            }
+        }
+
+        let journalRows = try Row.fetchAll(db, sql: """
+            SELECT journal.id, journal.invoice_id, journal.staged_path, journal.final_path,
+                   journal.sha256, journal.state, invoice.pdf_relative_path, invoice.pdf_sha256
+            FROM file_operation_journal AS journal
+            JOIN issued_invoice AS invoice ON invoice.id = journal.invoice_id
+            """)
+        for row in journalRows {
+            let operationID: String = row["id"]
+            let invoiceID: String = row["invoice_id"]
+            let stagedPath: String = row["staged_path"]
+            let finalPath: String = row["final_path"]
+            let hash: String = row["sha256"]
+            let state: String = row["state"]
+            let invoicePDFPath: String? = row["pdf_relative_path"]
+            let invoicePDFHash: String? = row["pdf_sha256"]
+            let stagedComponents = stagedPath.split(separator: "/", omittingEmptySubsequences: false)
+            let finalComponents = finalPath.split(separator: "/", omittingEmptySubsequences: false)
+            let expectedFilename = invoiceID.lowercased() + ".pdf"
+            guard UUID(uuidString: operationID) != nil,
+                  UUID(uuidString: invoiceID) != nil,
+                  ["pending", "complete", "needsRecovery"].contains(state),
+                  stagedComponents.count == 2,
+                  stagedComponents.first == "Staging",
+                  stagedComponents.last == Substring(expectedFilename),
+                  finalComponents.count == 2,
+                  finalComponents.first == "Invoices",
+                  finalComponents.last == Substring(expectedFilename),
+                  finalPath == invoicePDFPath,
+                  hash.lowercased() == invoicePDFHash?.lowercased() else {
+                throw InvoiceError.corruptData("invalid_file_operation_journal")
             }
         }
     }
