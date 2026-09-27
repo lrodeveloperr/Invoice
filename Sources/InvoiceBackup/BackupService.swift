@@ -120,8 +120,11 @@ public actor BackupService {
         let actualFiles = Set(try regularFiles(root: standardizedRoot).map {
             String($0.path.dropFirst(standardizedRoot.path.count + 1))
         }.filter { $0 != "manifest.json" })
-        guard actualFiles == Set(manifest.files.map(\.relativePath)) else {
-            throw InvoiceError.corruptData("unmanifested_file")
+        let expectedFiles = Set(manifest.files.map(\.relativePath))
+        guard actualFiles == expectedFiles else {
+            let actual = actualFiles.sorted().joined(separator: ",")
+            let expected = expectedFiles.sorted().joined(separator: ",")
+            throw InvoiceError.corruptData("unmanifested_file_actual=[\(actual)]_expected=[\(expected)]")
         }
         try AppDatabase.validateDatabaseFile(at: standardizedRoot.appendingPathComponent("data.sqlite").path)
         return manifest
