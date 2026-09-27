@@ -93,7 +93,7 @@ These exclusions are the differentiation. Existing products become unreliable or
 
 ## Screen model
 
-**Six custom screens with three persistent destinations.** Customer/site editing, tax selection, date-range selection, purchase and sharing are sheets or system surfaces, not additional navigation destinations.
+**Six custom screens with three persistent destinations on iPhone and iPad.** The iOS/iPadOS 18 `TabView` supplies the persistent destinations. Selection-driven `NavigationSplitView` collapses to one column on compact iPhone widths and keeps list/detail visible on regular-width iPad. Customer/site editing, tax selection, date-range selection, purchase and sharing are sheets or system surfaces, not additional navigation destinations.
 
 ### Persistent navigation
 
@@ -223,6 +223,6 @@ The build is not ready for listing until it passes all of these:
 4. Backup/restore and transaction-recovery tests.
 5. Six-screen native shell.
 6. StoreKit gate and entitlement recovery.
-7. Japanese fixtures, smallest-iPhone QA, iPad decision, accessibility and final listing assets.
+7. Japanese fixtures, smallest-iPhone QA, iPad split-view and resizing QA, accessibility, and final iPhone/iPad listing assets.
 
 **Final decision:** proceed. The launch succeeds only if it remains the fastest and safest path from **several completed service visits** to **one dated monthly invoice**. Every feature that does not strengthen that path is out of scope for version one.
