@@ -137,7 +137,12 @@ public enum PDFLayoutPlanner {
             var withFooter = blocks
             withFooter.append(PDFTextBlock(
                 text: "\(index + 1) / \(pages.count)",
-                frame: PDFRect(x: PDFLayoutPlan.margin, y: PDFLayoutPlan.pageHeight - 28, width: contentWidth, height: 12),
+                frame: PDFRect(
+                    x: PDFLayoutPlan.margin,
+                    y: PDFLayoutPlan.pageHeight - PDFLayoutPlan.margin - 12,
+                    width: contentWidth,
+                    height: 12
+                ),
                 style: .caption
             ))
             return PDFPagePlan(number: index + 1, blocks: withFooter)

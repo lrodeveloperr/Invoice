@@ -3,7 +3,7 @@ import GRDB
 import InvoiceDomain
 
 public actor AppDatabase {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     private let writer: DatabasePool
 
@@ -130,6 +130,30 @@ public actor AppDatabase {
             try db.execute(
                 sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
                 arguments: ["v2-active-invoice-link-guard", Date().timeIntervalSince1970, "schema-v2"]
+            )
+        }
+        migrator.registerMigration("v3-active-invoice-status-guard") { db in
+            try db.execute(sql: """
+                CREATE TRIGGER prevent_duplicate_active_invoice_reactivation
+                BEFORE UPDATE OF status ON issued_invoice
+                WHEN NEW.status IN ('issued', 'paid', 'needsRecovery')
+                 AND OLD.status NOT IN ('issued', 'paid', 'needsRecovery')
+                 AND EXISTS (
+                    SELECT 1
+                    FROM invoice_visit_link AS candidate
+                    JOIN invoice_visit_link AS other ON other.visit_id = candidate.visit_id
+                    JOIN issued_invoice AS other_invoice ON other_invoice.id = other.invoice_id
+                    WHERE candidate.invoice_id = NEW.id
+                      AND other.invoice_id <> NEW.id
+                      AND other_invoice.status IN ('issued', 'paid', 'needsRecovery')
+                 )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invoice_reactivation_would_duplicate_active_link');
+                END
+                """)
+            try db.execute(
+                sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
+                arguments: ["v3-active-invoice-status-guard", Date().timeIntervalSince1970, "schema-v3"]
             )
         }
         return migrator
@@ -468,10 +492,17 @@ public actor AppDatabase {
         }
     }
 
-    public func markNeedsRecovery(invoiceID: UUID) throws {
+    public func markNeedsRecovery(invoiceID: UUID, operationID: UUID) throws {
         try writer.write { db in
             guard let data: Data = try Data.fetchOne(db, sql: "SELECT payload FROM issued_invoice WHERE id = ?", arguments: [invoiceID.uuidString.lowercased()]) else { return }
             var invoice = try Self.decode(IssuedInvoice.self, from: data)
+            guard invoice.status == .issued || invoice.status == .paid || invoice.status == .needsRecovery else {
+                try db.execute(
+                    sql: "UPDATE file_operation_journal SET state = 'needsRecovery' WHERE id = ?",
+                    arguments: [operationID.uuidString.lowercased()]
+                )
+                return
+            }
             invoice.status = .needsRecovery
             let payload = try Self.encode(invoice)
             try db.execute(sql: "UPDATE issued_invoice SET status = ?, payload = ? WHERE id = ?", arguments: [InvoiceStatus.needsRecovery.rawValue, payload, invoiceID.uuidString.lowercased()])
@@ -484,6 +515,7 @@ public actor AppDatabase {
             guard result == "ok" else { throw InvoiceError.corruptData(result ?? "no_integrity_result") }
             let foreignKeys = try Row.fetchAll(db, sql: "PRAGMA foreign_key_check")
             guard foreignKeys.isEmpty else { throw InvoiceError.corruptData("foreign_key_check") }
+            try Self.validateDomainInvariants(in: db)
         }
     }
 
@@ -528,6 +560,7 @@ public actor AppDatabase {
                 ) ?? 0
                 guard exists == 1 else { throw InvoiceError.corruptData("missing_table_\(table)") }
             }
+            try validateDomainInvariants(in: db)
         }
     }
 
@@ -674,6 +707,75 @@ public actor AppDatabase {
         case .draft: ("draft", nil)
         case .unbilled: ("unbilled", nil)
         case .billed(let invoiceID): ("billed", invoiceID.uuidString.lowercased())
+        }
+    }
+
+    private static func validateDomainInvariants(in db: Database) throws {
+        let activeStatuses = "'issued', 'paid', 'needsRecovery'"
+        let duplicateActiveLinks = try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM (
+                SELECT link.visit_id
+                FROM invoice_visit_link AS link
+                JOIN issued_invoice AS invoice ON invoice.id = link.invoice_id
+                WHERE invoice.status IN (\(activeStatuses))
+                GROUP BY link.visit_id
+                HAVING COUNT(*) > 1
+            )
+            """) ?? 0
+        guard duplicateActiveLinks == 0 else {
+            throw InvoiceError.corruptData("duplicate_active_invoice_link")
+        }
+
+        let mismatchedActiveLinks = try Int.fetchOne(db, sql: """
+            SELECT COUNT(*)
+            FROM invoice_visit_link AS link
+            JOIN issued_invoice AS invoice ON invoice.id = link.invoice_id
+            JOIN visit ON visit.id = link.visit_id
+            WHERE invoice.status IN (\(activeStatuses))
+              AND (visit.state <> 'billed' OR visit.billed_invoice_id <> invoice.id)
+            """) ?? 0
+        guard mismatchedActiveLinks == 0 else {
+            throw InvoiceError.corruptData("active_invoice_visit_state_mismatch")
+        }
+
+        let invalidVisitStates = try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM visit
+            WHERE (state = 'billed' AND (
+                    billed_invoice_id IS NULL OR NOT EXISTS (
+                        SELECT 1
+                        FROM invoice_visit_link AS link
+                        JOIN issued_invoice AS invoice ON invoice.id = link.invoice_id
+                        WHERE link.visit_id = visit.id
+                          AND invoice.id = visit.billed_invoice_id
+                          AND invoice.status IN (\(activeStatuses))
+                    )
+                  ))
+               OR (state <> 'billed' AND billed_invoice_id IS NOT NULL)
+            """) ?? 0
+        guard invalidVisitStates == 0 else {
+            throw InvoiceError.corruptData("invalid_visit_billing_state")
+        }
+
+        let migrations = [
+            ("v2-active-invoice-link-guard", "prevent_duplicate_active_invoice_link"),
+            ("v3-active-invoice-status-guard", "prevent_duplicate_active_invoice_reactivation")
+        ]
+        for (migration, trigger) in migrations {
+            let applied = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM grdb_migrations WHERE identifier = ?",
+                arguments: [migration]
+            ) ?? 0
+            if applied > 0 {
+                let exists = try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+                    arguments: [trigger]
+                ) ?? 0
+                guard exists == 1 else {
+                    throw InvoiceError.corruptData("missing_invariant_trigger_\(trigger)")
+                }
+            }
         }
     }
 

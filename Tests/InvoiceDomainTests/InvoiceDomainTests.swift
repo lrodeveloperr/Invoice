@@ -31,6 +31,24 @@ final class InvoiceDomainTests: XCTestCase {
         XCTAssertEqual(totals.grandTotal.yen, 334)
     }
 
+    func testTaxGroupsEqualPercentagesDespiteDifferentRateMetadata() throws {
+        let firstRate = try TaxRate(id: "jp-10-old", basisPoints: 1_000, label: "10%")
+        let secondRate = try TaxRate(id: "jp-10-new", basisPoints: 1_000, label: "標準10%")
+        let date = try LocalDate(year: 2026, month: 9, day: 1)
+        let lines = try [firstRate, secondRate].enumerated().map { index, rate in
+            IssuedInvoiceLine(
+                id: UUID(), sourceVisitID: UUID(), workDate: date,
+                siteName: "現場", siteAddress: "", position: index,
+                description: "作業", quantity: try Quantity(decimalString: "1"), unit: "回",
+                unitPrice: try Money(yen: 5), taxRate: rate, net: try Money(yen: 5)
+            )
+        }
+        let totals = try InvoiceCalculator.totals(lines: lines, taxRounding: .floor)
+        XCTAssertEqual(totals.taxes.count, 1)
+        XCTAssertEqual(totals.taxes[0].taxable.yen, 10)
+        XCTAssertEqual(totals.totalTax.yen, 1)
+    }
+
     func testSnapshotRejectsSelectionMismatchAndOutOfRangeVisit() throws {
         let fixture = try Fixture.make()
         var mismatched = fixture.draft

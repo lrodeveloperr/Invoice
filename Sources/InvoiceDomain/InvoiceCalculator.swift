@@ -10,18 +10,26 @@ public enum InvoiceCalculator {
 
     public static func totals(lines: [IssuedInvoiceLine], taxRounding: RoundingRule) throws -> (subtotal: Money, taxes: [InvoiceTaxTotal], totalTax: Money, grandTotal: Money) {
         guard !lines.isEmpty else { throw InvoiceError.emptyInvoice }
-        var subtotals: [TaxRate: Money] = [:]
+        var subtotals: [Int: (rate: TaxRate, taxable: Money)] = [:]
         var subtotal = Money.zero
         for line in lines {
             subtotal = try subtotal.adding(line.net)
-            subtotals[line.taxRate] = try (subtotals[line.taxRate] ?? .zero).adding(line.net)
+            if var group = subtotals[line.taxRate.basisPoints] {
+                group.taxable = try group.taxable.adding(line.net)
+                if (line.taxRate.id, line.taxRate.label) < (group.rate.id, group.rate.label) {
+                    group.rate = line.taxRate
+                }
+                subtotals[line.taxRate.basisPoints] = group
+            } else {
+                subtotals[line.taxRate.basisPoints] = (line.taxRate, line.net)
+            }
         }
 
         var taxTotals: [InvoiceTaxTotal] = []
         var totalTax = Money.zero
-        for (rate, taxable) in subtotals.sorted(by: { $0.key.basisPoints > $1.key.basisPoints }) {
-            let roundedTax = try tax(for: taxable, rate: rate, rounding: taxRounding)
-            taxTotals.append(InvoiceTaxTotal(taxRate: rate, taxable: taxable, tax: roundedTax))
+        for (_, group) in subtotals.sorted(by: { $0.key > $1.key }) {
+            let roundedTax = try tax(for: group.taxable, rate: group.rate, rounding: taxRounding)
+            taxTotals.append(InvoiceTaxTotal(taxRate: group.rate, taxable: group.taxable, tax: roundedTax))
             totalTax = try totalTax.adding(roundedTax)
         }
         return (subtotal, taxTotals, totalTax, try subtotal.adding(totalTax))

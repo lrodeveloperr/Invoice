@@ -35,7 +35,10 @@ let package = Package(
         .testTarget(name: "InvoiceDomainTests", dependencies: ["InvoiceDomain"]),
         .testTarget(
             name: "InvoicePersistenceTests",
-            dependencies: ["InvoiceDomain", "InvoicePersistence", "InvoicePDF", "InvoiceBackup"]
+            dependencies: [
+                "InvoiceDomain", "InvoicePersistence", "InvoicePDF", "InvoiceBackup",
+                .product(name: "GRDB", package: "GRDB.swift")
+            ]
         )
     ],
     swiftLanguageModes: [.v6]

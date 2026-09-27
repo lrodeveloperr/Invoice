@@ -92,7 +92,10 @@ public actor IssueService {
                 try fileManager.moveItem(at: stagedURL, to: finalURL)
                 try await database.completeFileOperation(operation.id)
             } else {
-                try await database.markNeedsRecovery(invoiceID: operation.invoiceID)
+                try await database.markNeedsRecovery(
+                    invoiceID: operation.invoiceID,
+                    operationID: operation.id
+                )
             }
         }
     }

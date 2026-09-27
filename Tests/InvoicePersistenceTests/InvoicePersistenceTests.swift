@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import GRDB
 import XCTest
 @testable import InvoiceBackup
 @testable import InvoiceDomain
@@ -144,6 +146,117 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(next, "2026-0003")
     }
 
+    func testReplaceRestoreCopiesSourceBeforeReplacingInvoiceDirectory() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("canonical".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let invoiceDirectory = root.appendingPathComponent("Invoices", isDirectory: true)
+        let package = invoiceDirectory.appendingPathComponent("Import.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        _ = try await backup.restore(packageURL: package, mode: .replace)
+        let restoredInvoice = try await database.invoice(id: invoice.id)
+        let restored = try XCTUnwrap(restoredInvoice)
+        let restoredPDF = root.appendingPathComponent(try XCTUnwrap(restored.pdfRelativePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: restoredPDF.path))
+        try await database.integrityCheck()
+    }
+
+    func testRecoveryDoesNotReactivateVoidedInvoiceBesideReplacement() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let failingService = IssueService(database: database, filesRoot: root) { invoice in
+            let final = root
+                .appendingPathComponent("Invoices", isDirectory: true)
+                .appendingPathComponent(invoice.id.uuidString.lowercased() + ".pdf")
+            try FileManager.default.createDirectory(
+                at: final.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data("conflict".utf8).write(to: final)
+            return Data("invoice-a".utf8)
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await failingService.issue(
+                draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+                sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+            )
+        }
+        let invoicesAfterFailure = try await database.invoices()
+        let invoiceA = try XCTUnwrap(invoicesAfterFailure.first)
+        try await database.voidInvoice(id: invoiceA.id, returnVisitsToUnbilled: true)
+
+        let visitsAfterVoid = try await database.visits()
+        let replacementVisit = try XCTUnwrap(visitsAfterVoid.first)
+        let replacementService = IssueService(database: database, filesRoot: root) { _ in Data("invoice-b".utf8) }
+        let invoiceB = try await replacementService.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [replacementVisit], hasPro: true
+        )
+        let pendingOperations = try await database.pendingFileOperations()
+        let operation = try XCTUnwrap(pendingOperations.first)
+        let staged = root.appendingPathComponent(operation.stagedPath)
+        if FileManager.default.fileExists(atPath: staged.path) {
+            try FileManager.default.removeItem(at: staged)
+        }
+        try await failingService.recoverPendingFileOperations()
+
+        let storedInvoiceA = try await database.invoice(id: invoiceA.id)
+        let storedInvoiceB = try await database.invoice(id: invoiceB.id)
+        XCTAssertEqual(storedInvoiceA?.status, .voided)
+        XCTAssertEqual(storedInvoiceB?.status, .issued)
+        try await database.integrityCheck()
+    }
+
+    func testBackupValidationRejectsDuplicateActiveVisitLinks() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { invoice in
+            Data("pdf-\(invoice.number)".utf8)
+        }
+        let invoiceA = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        try await database.voidInvoice(id: invoiceA.id, returnVisitsToUnbilled: true)
+        let visitsAfterVoid = try await database.visits()
+        let visit = try XCTUnwrap(visitsAfterVoid.first)
+        _ = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [visit], hasPro: true
+        )
+        let package = root.appendingPathComponent("Hostile.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        let databaseURL = package.appendingPathComponent("data.sqlite")
+        let hostile = try DatabaseQueue(path: databaseURL.path)
+        try hostile.write { db in
+            try db.execute(sql: "DROP TRIGGER prevent_duplicate_active_invoice_reactivation")
+            try db.execute(
+                sql: "UPDATE issued_invoice SET status = 'issued' WHERE id = ?",
+                arguments: [invoiceA.id.uuidString.lowercased()]
+            )
+        }
+        try hostile.close()
+        try refreshDatabaseManifestHash(package: package)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await backup.validate(packageURL: package)
+        }
+    }
+
     func testBackupReplaceAndMergePreflight() async throws {
         let sourceRoot = try temporaryDirectory()
         let targetRoot = try temporaryDirectory()
@@ -198,6 +311,12 @@ final class InvoicePersistenceTests: XCTestCase {
                 PDFLayoutPlan.pageHeight - PDFLayoutPlan.margin - 24
             )
         }
+        for block in plan.pages.flatMap(\.blocks) {
+            XCTAssertLessThanOrEqual(
+                block.frame.y + block.frame.height,
+                PDFLayoutPlan.pageHeight - PDFLayoutPlan.margin
+            )
+        }
     }
 
     private func temporaryDirectory() throws -> URL {
@@ -213,6 +332,29 @@ final class InvoicePersistenceTests: XCTestCase {
         try await database.saveSite(fixture.site)
         try await database.saveVisit(fixture.visit)
         return fixture
+    }
+
+    private func refreshDatabaseManifestHash(package: URL) throws {
+        let manifestURL = package.appendingPathComponent("manifest.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(BackupManifest.self, from: Data(contentsOf: manifestURL))
+        let databaseData = try Data(contentsOf: package.appendingPathComponent("data.sqlite"))
+        let databaseRecord = BackupFile(
+            relativePath: "data.sqlite",
+            byteCount: databaseData.count,
+            sha256: SHA256.hash(data: databaseData).map { String(format: "%02x", $0) }.joined()
+        )
+        let updated = BackupManifest(
+            schemaVersion: manifest.schemaVersion,
+            appBuild: manifest.appBuild,
+            createdAt: manifest.createdAt,
+            files: manifest.files.map { $0.relativePath == "data.sqlite" ? databaseRecord : $0 }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(updated).write(to: manifestURL, options: .atomic)
     }
 }
 

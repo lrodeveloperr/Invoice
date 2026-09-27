@@ -102,6 +102,11 @@ public actor BackupService {
     @discardableResult
     public func validate(packageURL: URL) throws -> BackupManifest {
         let standardizedRoot = packageURL.standardizedFileURL
+        let pdfDirectory = standardizedRoot.appendingPathComponent("pdfs", isDirectory: true)
+        let pdfDirectoryValues = try pdfDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard pdfDirectoryValues.isDirectory == true, pdfDirectoryValues.isSymbolicLink != true else {
+            throw InvoiceError.corruptData("missing_pdf_directory")
+        }
         let manifestURL = standardizedRoot.appendingPathComponent("manifest.json")
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -178,14 +183,16 @@ public actor BackupService {
     }
 
     public func restore(packageURL: URL, mode: RestoreMode) async throws -> RestoreReport {
-        let preflight = try await preflightRestore(packageURL: packageURL, mode: mode)
+        let rollbackRoot = filesRoot.appendingPathComponent(".restore-rollback-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: rollbackRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: rollbackRoot) }
+        let incomingPackage = rollbackRoot.appendingPathComponent("Incoming.datedinvoicebackup", isDirectory: true)
+        try fileManager.copyItem(at: packageURL.standardizedFileURL, to: incomingPackage)
+        let preflight = try await preflightRestore(packageURL: incomingPackage, mode: mode)
         if let merge = preflight.databaseMerge, !merge.canCommit {
             throw InvoiceError.corruptData("merge_conflict")
         }
 
-        let rollbackRoot = filesRoot.appendingPathComponent(".restore-rollback-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: rollbackRoot, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: rollbackRoot) }
         let rollbackDatabase = rollbackRoot.appendingPathComponent("data.sqlite")
         try await database.exportDatabase(to: rollbackDatabase.path)
         let liveInvoices = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
@@ -195,19 +202,19 @@ public actor BackupService {
         }
 
         do {
-            let incomingDatabase = packageURL.appendingPathComponent("data.sqlite").path
+            let incomingDatabase = incomingPackage.appendingPathComponent("data.sqlite").path
             let committedMerge: DatabaseMergeReport?
             switch mode {
             case .replace:
                 try await database.replaceContents(from: incomingDatabase)
                 committedMerge = nil
-                try replaceInvoiceDirectory(from: packageURL.appendingPathComponent("pdfs", isDirectory: true))
+                try replaceInvoiceDirectory(from: incomingPackage.appendingPathComponent("pdfs", isDirectory: true))
             case .merge:
                 committedMerge = try await database.mergeContents(from: incomingDatabase)
                 guard committedMerge?.canCommit == true else {
                     throw InvoiceError.corruptData("merge_conflict")
                 }
-                try mergeInvoiceDirectory(from: packageURL.appendingPathComponent("pdfs", isDirectory: true))
+                try mergeInvoiceDirectory(from: incomingPackage.appendingPathComponent("pdfs", isDirectory: true))
             }
             try await database.integrityCheck()
             return RestoreReport(
