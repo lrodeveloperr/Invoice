@@ -3,7 +3,7 @@ import GRDB
 import InvoiceDomain
 
 public actor AppDatabase {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     private let writer: DatabasePool
 
@@ -112,6 +112,26 @@ public actor AppDatabase {
                 arguments: ["v1", Date().timeIntervalSince1970, "schema-v1"]
             )
         }
+        migrator.registerMigration("v2-active-invoice-link-guard") { db in
+            try db.execute(sql: """
+                CREATE TRIGGER prevent_duplicate_active_invoice_link
+                BEFORE INSERT ON invoice_visit_link
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM invoice_visit_link AS link
+                    JOIN issued_invoice AS invoice ON invoice.id = link.invoice_id
+                    WHERE link.visit_id = NEW.visit_id
+                      AND invoice.status IN ('issued', 'paid', 'needsRecovery')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'visit_already_linked_to_active_invoice');
+                END
+                """)
+            try db.execute(
+                sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
+                arguments: ["v2-active-invoice-link-guard", Date().timeIntervalSince1970, "schema-v2"]
+            )
+        }
         return migrator
     }
 
@@ -192,6 +212,24 @@ public actor AppDatabase {
         let payload = try Self.encode(visit)
         let columns = Self.visitStateColumns(visit.state)
         try writer.write { db in
+            if let stored = try Self.fetchVisit(db: db, id: visit.id) {
+                switch stored.state {
+                case .draft:
+                    guard visit.state == .draft || visit.state == .unbilled else {
+                        throw InvoiceError.invalidTransition
+                    }
+                case .unbilled:
+                    guard visit.state == .unbilled else {
+                        throw InvoiceError.invalidTransition
+                    }
+                case .billed:
+                    guard visit.state == stored.state else {
+                        throw InvoiceError.invalidTransition
+                    }
+                }
+            } else if case .billed = visit.state {
+                throw InvoiceError.invalidTransition
+            }
             try db.execute(sql: """
                 INSERT INTO visit(id, customer_id, site_id, work_date, state, billed_invoice_id, payload, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -493,11 +531,74 @@ public actor AppDatabase {
         }
     }
 
+    public static func canonicalPDFReferences(at path: String) throws -> [CanonicalPDFReference] {
+        let database = try DatabaseQueue(path: path)
+        return try database.read { db in
+            let incomplete = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM issued_invoice
+                WHERE pdf_relative_path IS NULL OR pdf_sha256 IS NULL
+                   OR pdf_relative_path = '' OR pdf_sha256 = ''
+                """) ?? 0
+            guard incomplete == 0 else {
+                throw InvoiceError.corruptData("issued_invoice_missing_pdf_reference")
+            }
+
+            return try Row.fetchAll(db, sql: """
+                SELECT id, pdf_relative_path, pdf_sha256
+                FROM issued_invoice
+                ORDER BY id
+                """).map { row in
+                let invoiceID: String = row["id"]
+                let relativePath: String = row["pdf_relative_path"]
+                let sha256: String = row["pdf_sha256"]
+                guard UUID(uuidString: invoiceID) != nil,
+                      relativePath.hasPrefix("Invoices/"),
+                      !relativePath.contains(".."),
+                      URL(fileURLWithPath: relativePath).pathComponents.count == 2,
+                      relativePath.lowercased().hasSuffix(".pdf"),
+                      sha256.count == 64,
+                      sha256.allSatisfy({ $0.isHexDigit }) else {
+                    throw InvoiceError.corruptData("invalid_issued_pdf_reference")
+                }
+                return CanonicalPDFReference(
+                    invoiceID: invoiceID,
+                    relativePath: relativePath,
+                    sha256: sha256.lowercased()
+                )
+            }
+        }
+    }
+
     public func replaceContents(from sourcePath: String) throws {
         try Self.validateDatabaseFile(at: sourcePath)
+        let liveSequences: [(year: Int, nextValue: Int)] = try writer.read { db in
+            try Row.fetchAll(db, sql: "SELECT year, next_value FROM invoice_sequence").map { row in
+                (year: row["year"], nextValue: row["next_value"])
+            }
+        }
+        let liveConsumedIssueID: String? = try writer.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
+            )
+        }
         let source = try DatabaseQueue(path: sourcePath)
         try source.backup(to: writer)
         try Self.migrator.migrate(writer)
+        try writer.write { db in
+            for sequence in liveSequences {
+                try db.execute(sql: """
+                    INSERT INTO invoice_sequence(year, next_value) VALUES (?, ?)
+                    ON CONFLICT(year) DO UPDATE SET next_value = MAX(next_value, excluded.next_value)
+                    """, arguments: [sequence.year, sequence.nextValue])
+            }
+            if let liveConsumedIssueID {
+                try db.execute(
+                    sql: "UPDATE entitlement_usage SET first_clean_invoice_id = ? WHERE singleton = 1",
+                    arguments: [liveConsumedIssueID]
+                )
+            }
+        }
         try integrityCheck()
     }
 
@@ -636,4 +737,16 @@ public struct FileOperation: Hashable, Sendable {
     public let finalPath: String
     public let sha256: String
     public let createdAt: Date
+}
+
+public struct CanonicalPDFReference: Hashable, Sendable {
+    public let invoiceID: String
+    public let relativePath: String
+    public let sha256: String
+
+    public init(invoiceID: String, relativePath: String, sha256: String) {
+        self.invoiceID = invoiceID
+        self.relativePath = relativePath
+        self.sha256 = sha256
+    }
 }

@@ -53,18 +53,33 @@ public actor BackupService {
 
         let databaseURL = temporary.appendingPathComponent("data.sqlite")
         try await database.exportDatabase(to: databaseURL.path)
-        let pdfSource = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
         let pdfDestination = temporary.appendingPathComponent("pdfs", isDirectory: true)
         try fileManager.createDirectory(at: pdfDestination, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: pdfSource.path) {
-            for url in try fileManager.contentsOfDirectory(at: pdfSource, includingPropertiesForKeys: nil) where url.pathExtension.lowercased() == "pdf" {
-                try fileManager.copyItem(at: url, to: pdfDestination.appendingPathComponent(url.lastPathComponent))
-            }
-        }
 
         guard fileManager.fileExists(atPath: databaseURL.path) else {
             throw InvoiceError.corruptData("database_export_missing")
         }
+        let pdfReferences = try AppDatabase.canonicalPDFReferences(at: databaseURL.path)
+        guard Set(pdfReferences.map(\.relativePath)).count == pdfReferences.count else {
+            throw InvoiceError.corruptData("duplicate_canonical_pdf_path")
+        }
+        for reference in pdfReferences {
+            let source = filesRoot.appendingPathComponent(reference.relativePath).standardizedFileURL
+            let canonicalRoot = filesRoot.appendingPathComponent("Invoices", isDirectory: true).standardizedFileURL
+            guard source.deletingLastPathComponent() == canonicalRoot else {
+                throw InvoiceError.corruptData("canonical_pdf_path_escape")
+            }
+            let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw InvoiceError.corruptData("canonical_pdf_missing")
+            }
+            let data = try Data(contentsOf: source, options: [.mappedIfSafe])
+            guard sha256(data) == reference.sha256 else {
+                throw InvoiceError.corruptData("canonical_pdf_hash_mismatch")
+            }
+            try data.write(to: pdfDestination.appendingPathComponent(source.lastPathComponent), options: .atomic)
+        }
+
         var fileRecords: [BackupFile] = []
         let databaseData = try Data(contentsOf: databaseURL, options: [.mappedIfSafe])
         fileRecords.append(BackupFile(relativePath: "data.sqlite", byteCount: databaseData.count, sha256: sha256(databaseData)))
@@ -127,7 +142,23 @@ public actor BackupService {
             let expected = expectedFiles.sorted().joined(separator: ",")
             throw InvoiceError.corruptData("unmanifested_file_actual=[\(actual)]_expected=[\(expected)]")
         }
-        try AppDatabase.validateDatabaseFile(at: standardizedRoot.appendingPathComponent("data.sqlite").path)
+        let backupDatabase = standardizedRoot.appendingPathComponent("data.sqlite")
+        try AppDatabase.validateDatabaseFile(at: backupDatabase.path)
+        let references = try AppDatabase.canonicalPDFReferences(at: backupDatabase.path)
+        let expectedPDFs = Set(references.map {
+            "pdfs/" + URL(fileURLWithPath: $0.relativePath).lastPathComponent
+        })
+        let manifestPDFs = Set(manifest.files.map(\.relativePath).filter { $0.hasPrefix("pdfs/") })
+        guard expectedPDFs == manifestPDFs else {
+            throw InvoiceError.corruptData("canonical_pdf_manifest_mismatch")
+        }
+        let manifestByPath = Dictionary(uniqueKeysWithValues: manifest.files.map { ($0.relativePath, $0) })
+        for reference in references {
+            let packagePath = "pdfs/" + URL(fileURLWithPath: reference.relativePath).lastPathComponent
+            guard manifestByPath[packagePath]?.sha256 == reference.sha256 else {
+                throw InvoiceError.corruptData("canonical_pdf_database_hash_mismatch")
+            }
+        }
         return manifest
     }
 

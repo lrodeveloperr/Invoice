@@ -72,11 +72,15 @@ public enum InvoiceCalculator {
             }
             try site.validate()
             for line in visit.lines.sorted(by: { $0.position < $1.position }) {
+                let issuedNet = try line.quantity.multiplied(
+                    by: line.unitPrice,
+                    rounding: business.lineRounding
+                )
                 snapshotLines.append(IssuedInvoiceLine(
                     id: UUID(), sourceVisitID: visit.id, workDate: visit.workDate,
                     siteName: site.name, siteAddress: site.address, position: position,
                     description: line.description, quantity: line.quantity, unit: line.unit,
-                    unitPrice: line.unitPrice, taxRate: line.taxRate, net: line.net
+                    unitPrice: line.unitPrice, taxRate: line.taxRate, net: issuedNet
                 ))
                 position += 1
             }

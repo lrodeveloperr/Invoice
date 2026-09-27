@@ -50,14 +50,55 @@ public enum PDFLayoutPlanner {
             y += height
         }
 
+        func visualLines(for text: String, charactersPerLine: Int) -> [String] {
+            text.split(separator: "\n", omittingEmptySubsequences: false).flatMap { paragraph in
+                if paragraph.isEmpty { return [""] }
+                var remaining = String(paragraph)
+                var lines: [String] = []
+                while !remaining.isEmpty {
+                    let end = remaining.index(
+                        remaining.startIndex,
+                        offsetBy: min(charactersPerLine, remaining.count)
+                    )
+                    lines.append(String(remaining[..<end]))
+                    remaining = String(remaining[end...])
+                }
+                return lines
+            }
+        }
+
+        func appendWrapped(
+            _ text: String,
+            style: PDFTextBlock.Style,
+            charactersPerLine: Int,
+            padding: Double = 0,
+            minimumHeight: Double = 0
+        ) {
+            let maximumBlockHeight = PDFLayoutPlan.pageHeight - (2 * PDFLayoutPlan.margin) - 46
+            let maximumLines = max(1, Int(floor((maximumBlockHeight - 2 * padding) / bodyLineHeight)))
+            let lines = visualLines(for: text, charactersPerLine: charactersPerLine)
+            var start = 0
+            while start < lines.count {
+                let end = min(start + maximumLines, lines.count)
+                let chunk = lines[start..<end].joined(separator: "\n")
+                let height = max(minimumHeight, Double(end - start) * bodyLineHeight + 2 * padding)
+                append(chunk, style: style, height: height)
+                start = end
+            }
+        }
+
         append(labels.invoice, style: .title, height: 34)
         append("\(labels.number): \(invoice.number)", style: .body, height: 18)
         append("\(labels.issueDate): \(invoice.issueDate.description)", style: .body, height: 18)
-        append(invoice.customerName + labels.recipientSuffix, style: .heading, height: 28)
-        if !invoice.customerAddress.isEmpty { append(invoice.customerAddress, style: .body, height: 20) }
+        appendWrapped(invoice.customerName + labels.recipientSuffix, style: .heading, charactersPerLine: 32, minimumHeight: 28)
+        if !invoice.customerAddress.isEmpty {
+            appendWrapped(invoice.customerAddress, style: .body, charactersPerLine: 44, minimumHeight: 20)
+        }
         y += 8
-        append(invoice.issuer.issuerName, style: .heading, height: 22)
-        if !invoice.issuer.postalAddress.isEmpty { append(invoice.issuer.postalAddress, style: .body, height: 18) }
+        appendWrapped(invoice.issuer.issuerName, style: .heading, charactersPerLine: 32, minimumHeight: 22)
+        if !invoice.issuer.postalAddress.isEmpty {
+            appendWrapped(invoice.issuer.postalAddress, style: .body, charactersPerLine: 44, minimumHeight: 18)
+        }
         if let registration = invoice.issuer.registrationNumber {
             append("\(labels.registration): \(registration)", style: .body, height: 18)
         }
@@ -68,14 +109,17 @@ public enum PDFLayoutPlanner {
         for line in invoice.lines {
             let group = "\(line.workDate.description) · \(line.siteName)"
             if group != lastGroup {
-                append(group, style: .heading, height: 22)
+                appendWrapped(group, style: .heading, charactersPerLine: 36, minimumHeight: 22)
                 lastGroup = group
             }
-            let charactersPerLine = 38
-            let lineCount = max(1, Int(ceil(Double(line.description.count) / Double(charactersPerLine))))
-            let rowHeight = Double(lineCount) * bodyLineHeight + 2 * rowPadding
             let amount = "¥\(line.net.yen)"
-            append("\(line.description)\n\(line.quantity.description) \(line.unit) × ¥\(line.unitPrice.yen) · \(line.taxRate.label)        \(amount)", style: .body, height: rowHeight)
+            appendWrapped(
+                "\(line.description)\n\(line.quantity.description) \(line.unit) × ¥\(line.unitPrice.yen) · \(line.taxRate.label)        \(amount)",
+                style: .body,
+                charactersPerLine: 38,
+                padding: rowPadding,
+                minimumHeight: bodyLineHeight + 2 * rowPadding
+            )
         }
 
         y += 10
@@ -85,7 +129,9 @@ public enum PDFLayoutPlanner {
         }
         append("\(labels.total): ¥\(invoice.grandTotal.yen)", style: .amount, height: 28)
         append("\(labels.dueDate): \(invoice.dueDate.description)", style: .body, height: 20)
-        if !invoice.issuer.bankDetails.isEmpty { append(invoice.issuer.bankDetails, style: .body, height: 40) }
+        if !invoice.issuer.bankDetails.isEmpty {
+            appendWrapped(invoice.issuer.bankDetails, style: .body, charactersPerLine: 44, minimumHeight: 40)
+        }
 
         let plannedPages = pages.enumerated().map { index, blocks in
             var withFooter = blocks

@@ -28,9 +28,10 @@ public final class StoreKitEntitlementStore: ObservableObject {
     public var displayPrice: String? { product?.displayPrice }
 
     public func load() async {
+        await refreshEntitlement()
         do {
             product = try await Product.products(for: [productID]).first
-            await refreshEntitlement()
+            lastErrorID = nil
         } catch {
             lastErrorID = "storekit_product_load_failed"
         }

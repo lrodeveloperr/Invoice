@@ -48,6 +48,30 @@ final class InvoiceDomainTests: XCTestCase {
         ))
     }
 
+    func testSnapshotRecalculatesLineUsingDeclaredIssueRoundingPolicy() throws {
+        let fixture = try Fixture.make()
+        var visit = fixture.visit
+        visit.lines = [try VisitLine(
+            position: 0,
+            description: "端数のある作業",
+            quantity: Quantity(decimalString: "0.5"),
+            unit: "回",
+            unitPrice: Money(yen: 101),
+            taxRate: .standard10,
+            lineRounding: .floor
+        )]
+        XCTAssertEqual(visit.lines[0].net.yen, 50)
+
+        var business = fixture.business
+        business.lineRounding = .halfUp
+        let invoice = try InvoiceCalculator.snapshot(
+            number: "2026-0001", draft: fixture.draft, business: business,
+            customer: fixture.customer, sites: [fixture.site.id: fixture.site], visits: [visit]
+        )
+        XCTAssertEqual(invoice.lineRounding, .halfUp)
+        XCTAssertEqual(invoice.lines[0].net.yen, 51)
+    }
+
     func testEntitlementBoundary() {
         let free = EntitlementState()
         XCTAssertTrue(free.permits(activeCustomerCount: 0))

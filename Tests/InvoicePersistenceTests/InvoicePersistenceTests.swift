@@ -58,6 +58,92 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(storedVisits.first?.state, .unbilled)
     }
 
+    func testStaleVisitSaveCannotReopenBilledWork() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            try await database.saveVisit(fixture.visit)
+        }
+        let storedVisits = try await database.visits()
+        let storedVisit = try XCTUnwrap(storedVisits.first)
+        XCTAssertEqual(storedVisit.state, .billed(invoiceID: invoice.id))
+        let storedInvoices = try await database.invoices()
+        XCTAssertEqual(storedInvoices.count, 1)
+    }
+
+    func testBackupRejectsMissingOrChangedCanonicalPDF() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("canonical-pdf".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let pdfURL = root.appendingPathComponent(try XCTUnwrap(invoice.pdfRelativePath))
+        try Data("changed-pdf".utf8).write(to: pdfURL, options: .atomic)
+
+        let package = root.appendingPathComponent("Invalid.invoicebackup", isDirectory: true)
+        await XCTAssertThrowsErrorAsync {
+            try await BackupService(database: database, filesRoot: root).export(to: package, appBuild: "tests")
+        }
+        try FileManager.default.removeItem(at: pdfURL)
+        await XCTAssertThrowsErrorAsync {
+            try await BackupService(database: database, filesRoot: root).export(to: package, appBuild: "tests")
+        }
+    }
+
+    func testReplaceRestoreNeverDecrementsInvoiceSequence() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { invoice in
+            Data("pdf-\(invoice.number)".utf8)
+        }
+        _ = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let package = root.appendingPathComponent("Earlier.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        var secondVisit = fixture.visit
+        secondVisit.id = UUID()
+        secondVisit.workDate = try LocalDate(year: 2026, month: 9, day: 11)
+        secondVisit.updatedAt = Date()
+        try await database.saveVisit(secondVisit)
+        let secondDraft = InvoiceDraft(
+            customerID: fixture.customer.id,
+            selectedVisitIDs: [secondVisit.id],
+            coveredStart: try LocalDate(year: 2026, month: 9, day: 1),
+            coveredEnd: try LocalDate(year: 2026, month: 9, day: 30),
+            issueDate: try LocalDate(year: 2026, month: 9, day: 30),
+            dueDate: try LocalDate(year: 2026, month: 10, day: 31)
+        )
+        _ = try await service.issue(
+            draft: secondDraft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [secondVisit], hasPro: true
+        )
+
+        _ = try await backup.restore(packageURL: package, mode: .replace)
+        let next = try await database.proposedNumber(
+            issueDate: try LocalDate(year: 2026, month: 9, day: 30),
+            prefix: ""
+        )
+        XCTAssertEqual(next, "2026-0003")
+    }
+
     func testBackupReplaceAndMergePreflight() async throws {
         let sourceRoot = try temporaryDirectory()
         let targetRoot = try temporaryDirectory()
@@ -94,6 +180,24 @@ final class InvoicePersistenceTests: XCTestCase {
         let plan = try PDFLayoutPlanner.plan(invoice: invoice)
         XCTAssertFalse(plan.pages.isEmpty)
         XCTAssertTrue(plan.pages.flatMap(\.blocks).contains { $0.text.contains("2026-09-10") })
+    }
+
+    func testPDFLayoutPaginatesLongJapaneseDescriptionWithinPageBounds() throws {
+        let fixture = try Fixture.make()
+        var visit = fixture.visit
+        visit.lines[0].description = String(repeating: "長い作業説明", count: 500)
+        let invoice = try InvoiceCalculator.snapshot(
+            number: "2026-0001", draft: fixture.draft, business: fixture.business,
+            customer: fixture.customer, sites: [fixture.site.id: fixture.site], visits: [visit]
+        )
+        let plan = try PDFLayoutPlanner.plan(invoice: invoice)
+        XCTAssertGreaterThan(plan.pages.count, 1)
+        for block in plan.pages.flatMap(\.blocks) where block.style != .caption {
+            XCTAssertLessThanOrEqual(
+                block.frame.y + block.frame.height,
+                PDFLayoutPlan.pageHeight - PDFLayoutPlan.margin - 24
+            )
+        }
     }
 
     private func temporaryDirectory() throws -> URL {
