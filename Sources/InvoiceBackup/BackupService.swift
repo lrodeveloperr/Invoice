@@ -62,9 +62,14 @@ public actor BackupService {
             }
         }
 
+        guard fileManager.fileExists(atPath: databaseURL.path) else {
+            throw InvoiceError.corruptData("database_export_missing")
+        }
         var fileRecords: [BackupFile] = []
-        for url in try regularFiles(root: temporary) where url.lastPathComponent != "manifest.json" {
-            let relative = String(url.path.dropFirst(temporary.path.count + 1))
+        let databaseData = try Data(contentsOf: databaseURL, options: [.mappedIfSafe])
+        fileRecords.append(BackupFile(relativePath: "data.sqlite", byteCount: databaseData.count, sha256: sha256(databaseData)))
+        for url in try regularFiles(root: pdfDestination) {
+            let relative = "pdfs/" + url.lastPathComponent
             let data = try Data(contentsOf: url, options: [.mappedIfSafe])
             fileRecords.append(BackupFile(relativePath: relative, byteCount: data.count, sha256: sha256(data)))
         }

@@ -452,6 +452,7 @@ public actor AppDatabase {
     public func exportDatabase(to path: String) throws {
         let destination = try DatabaseQueue(path: path)
         try writer.backup(to: destination)
+        try destination.close()
     }
 
     public static func validateDatabaseFile(at path: String) throws {
