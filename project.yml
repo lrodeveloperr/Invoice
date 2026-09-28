@@ -1,0 +1,101 @@
+name: Invoice
+options:
+  bundleIdPrefix: com.worksbienstudios
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+packages:
+  DatedServiceInvoice:
+    path: "."
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  Invoice:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: App
+        excludes:
+          - Resources
+    resources:
+      - path: App/Resources
+    dependencies:
+      - package: DatedServiceInvoice
+        product: InvoiceDomain
+      - package: DatedServiceInvoice
+        product: InvoicePersistence
+      - package: DatedServiceInvoice
+        product: InvoicePDF
+      - package: DatedServiceInvoice
+        product: InvoiceBackup
+      - package: DatedServiceInvoice
+        product: InvoiceEntitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.worksbienstudios.serviceinvoicejp
+        PRODUCT_NAME: Dated Service Invoice
+        PRODUCT_MODULE_NAME: Invoice
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_KEY_CFBundleDisplayName: 請求書作成・作業記録
+        INFOPLIST_KEY_CFBundleDevelopmentRegion: ja
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    info:
+      path: App/Info.plist
+      properties:
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Invoice Backup
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.worksbienstudios.datedinvoicebackup
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.worksbienstudios.datedinvoicebackup
+            UTTypeDescription: Dated Service Invoice Backup
+            UTTypeConformsTo:
+              - com.apple.package
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - datedinvoicebackup
+  InvoiceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Invoice
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.worksbienstudios.serviceinvoicejp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+schemes:
+  Invoice:
+    build:
+      targets:
+        Invoice: all
+    run:
+      config: Debug
+      storeKitConfiguration: StoreKit/Invoice.storekit
+    test:
+      config: Debug
+      targets:
+        - InvoiceUITests
+    archive:
+      config: Release

@@ -1,0 +1,72 @@
+name: Engine integrity
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record Apple toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Resolve exact dependencies
+        run: swift package resolve
+      - name: Build with warnings as errors
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Run automated tests
+        run: swift test -Xswiftc -warnings-as-errors --parallel
+      - name: Run deterministic property harness
+        run: swift run invoice-harness property
+      - name: Run full engine demonstration
+        run: swift run invoice-harness demo --root "${RUNNER_TEMP}/invoice-harness-ci"
+      - name: Validate StoreKit product contract
+        run: >-
+          jq -e '.products | length == 1 and
+          .[0].productID == "com.worksbien.serviceinvoice.pro.lifetime" and
+          .[0].type == "NonConsumable" and
+          .[0].displayPrice == "2000"'
+          StoreKit/Invoice.storekit
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate universal app project
+        run: xcodegen generate
+      - name: Build iPhone, iPad and UI tests
+        run: >-
+          xcodebuild -project Invoice.xcodeproj -scheme Invoice
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build-for-testing
+      - name: Run UI tests on iPhone and iPad
+        shell: bash
+        run: |
+          set -euo pipefail
+          devices="$(xcrun simctl list devices available --json)"
+          iphone_id="$(jq -r '[.devices | to_entries[] | .value[] | select(.isAvailable == true and (.name | startswith("iPhone")))] | first | .udid // empty' <<<"$devices")"
+          ipad_id="$(jq -r '[.devices | to_entries[] | .value[] | select(.isAvailable == true and (.name | startswith("iPad")))] | first | .udid // empty' <<<"$devices")"
+          test -n "$iphone_id"
+          test -n "$ipad_id"
+          xcodebuild -project Invoice.xcodeproj -scheme Invoice \
+            -destination "platform=iOS Simulator,id=$iphone_id" \
+            -resultBundlePath "$RUNNER_TEMP/Invoice-iPhone.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test-without-building
+          xcodebuild -project Invoice.xcodeproj -scheme Invoice \
+            -destination "platform=iOS Simulator,id=$ipad_id" \
+            -resultBundlePath "$RUNNER_TEMP/Invoice-iPad.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test-without-building
+      - name: Upload UI test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results
+          path: |
+            ${{ runner.temp }}/Invoice-iPhone.xcresult
+            ${{ runner.temp }}/Invoice-iPad.xcresult
