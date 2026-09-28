@@ -1,9 +1,6 @@
 name: Engine integrity
 
 on:
-  push:
-    branches:
-      - integrity-candidate
   pull_request:
     branches:
       - main

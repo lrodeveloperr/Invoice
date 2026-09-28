@@ -1003,86 +1003,99 @@ public actor AppDatabase {
 
     public func mergeContents(from sourcePath: String, dryRun: Bool = false) throws -> DatabaseMergeReport {
         try Self.validateDatabaseFile(at: sourcePath)
-        return try writer.write { db in
-            try db.execute(sql: "ATTACH DATABASE ? AS incoming", arguments: [sourcePath])
-            defer { try? db.execute(sql: "DETACH DATABASE incoming") }
+        try writer.writeWithoutTransaction { db in
+            try? db.execute(sql: "DETACH DATABASE incoming")
+        }
+        do {
+            let report = try writer.write { db in
+                try db.execute(sql: "ATTACH DATABASE ? AS incoming", arguments: [sourcePath])
 
-            let incomingHasTemplates = (try Int.fetchOne(
-                db,
-                sql: "SELECT COUNT(*) FROM incoming.sqlite_master WHERE type = 'table' AND name = 'service_template'"
-            ) ?? 0) == 1
-            var keyedTables = [
-                "business_profile", "customer", "site", "visit", "invoice_draft", "issued_invoice"
-            ]
-            if incomingHasTemplates { keyedTables.insert("service_template", at: 1) }
-            var conflicts: [String] = []
-            for table in keyedTables {
-                let ids = try String.fetchAll(db, sql: """
-                    SELECT incoming.\(table).id
-                    FROM incoming.\(table)
-                    JOIN main.\(table) ON main.\(table).id = incoming.\(table).id
-                    WHERE main.\(table).payload <> incoming.\(table).payload
-                    ORDER BY incoming.\(table).id
+                let incomingHasTemplates = (try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM incoming.sqlite_master WHERE type = 'table' AND name = 'service_template'"
+                ) ?? 0) == 1
+                var keyedTables = [
+                    "business_profile", "customer", "site", "visit", "invoice_draft", "issued_invoice"
+                ]
+                if incomingHasTemplates { keyedTables.insert("service_template", at: 1) }
+                var conflicts: [String] = []
+                for table in keyedTables {
+                    let ids = try String.fetchAll(db, sql: """
+                        SELECT incoming.\(table).id
+                        FROM incoming.\(table)
+                        JOIN main.\(table) ON main.\(table).id = incoming.\(table).id
+                        WHERE main.\(table).payload <> incoming.\(table).payload
+                        ORDER BY incoming.\(table).id
+                        """)
+                    conflicts.append(contentsOf: ids.map { "\(table):\($0)" })
+                }
+                let numberConflicts = try String.fetchAll(db, sql: """
+                    SELECT incoming.issued_invoice.number
+                    FROM incoming.issued_invoice
+                    JOIN main.issued_invoice ON main.issued_invoice.number = incoming.issued_invoice.number
+                    WHERE main.issued_invoice.id <> incoming.issued_invoice.id
+                    ORDER BY incoming.issued_invoice.number
                     """)
-                conflicts.append(contentsOf: ids.map { "\(table):\($0)" })
-            }
-            let numberConflicts = try String.fetchAll(db, sql: """
-                SELECT incoming.issued_invoice.number
-                FROM incoming.issued_invoice
-                JOIN main.issued_invoice ON main.issued_invoice.number = incoming.issued_invoice.number
-                WHERE main.issued_invoice.id <> incoming.issued_invoice.id
-                ORDER BY incoming.issued_invoice.number
-                """)
-            conflicts.append(contentsOf: numberConflicts.map { "invoice_number:\($0)" })
+                conflicts.append(contentsOf: numberConflicts.map { "invoice_number:\($0)" })
 
-            let counts = DatabaseMergeReport.Counts(
-                customers: try Self.newRowCount(db: db, table: "customer"),
-                sites: try Self.newRowCount(db: db, table: "site"),
-                visits: try Self.newRowCount(db: db, table: "visit"),
-                drafts: try Self.newRowCount(db: db, table: "invoice_draft"),
-                invoices: try Self.newRowCount(db: db, table: "issued_invoice"),
-                templates: incomingHasTemplates
-                    ? try Self.newRowCount(db: db, table: "service_template")
-                    : 0
-            )
-            let report = DatabaseMergeReport(counts: counts, conflicts: conflicts)
-            guard conflicts.isEmpty else { return report }
-            guard !dryRun else { return report }
-
-            try db.execute(sql: "INSERT OR IGNORE INTO business_profile SELECT * FROM incoming.business_profile")
-            if incomingHasTemplates {
-                try db.execute(sql: "INSERT OR IGNORE INTO service_template SELECT * FROM incoming.service_template")
-            }
-            try db.execute(sql: "INSERT OR IGNORE INTO customer SELECT * FROM incoming.customer")
-            try db.execute(sql: "INSERT OR IGNORE INTO site SELECT * FROM incoming.site")
-            try db.execute(sql: "INSERT OR IGNORE INTO visit SELECT * FROM incoming.visit")
-            try db.execute(sql: "INSERT OR IGNORE INTO invoice_draft SELECT * FROM incoming.invoice_draft")
-            try db.execute(sql: "INSERT OR IGNORE INTO issued_invoice SELECT * FROM incoming.issued_invoice")
-            try db.execute(sql: """
-                INSERT OR IGNORE INTO invoice_visit_link(invoice_id, visit_id)
-                SELECT link.invoice_id, link.visit_id
-                FROM incoming.invoice_visit_link AS link
-                JOIN incoming.issued_invoice AS invoice ON invoice.id = link.invoice_id
-                ORDER BY CASE
-                    WHEN invoice.status IN ('issued', 'paid', 'needsRecovery') THEN 1
-                    ELSE 0
-                END, invoice.issued_at, link.invoice_id, link.visit_id
-                """)
-            try db.execute(sql: """
-                INSERT INTO invoice_sequence(year, next_value)
-                SELECT year, next_value FROM incoming.invoice_sequence
-                ON CONFLICT(year) DO UPDATE SET next_value = MAX(next_value, excluded.next_value)
-                """)
-            try db.execute(sql: """
-                UPDATE entitlement_usage
-                SET first_clean_invoice_id = COALESCE(
-                    first_clean_invoice_id,
-                    (SELECT first_clean_invoice_id FROM incoming.entitlement_usage WHERE singleton = 1)
+                let counts = DatabaseMergeReport.Counts(
+                    customers: try Self.newRowCount(db: db, table: "customer"),
+                    sites: try Self.newRowCount(db: db, table: "site"),
+                    visits: try Self.newRowCount(db: db, table: "visit"),
+                    drafts: try Self.newRowCount(db: db, table: "invoice_draft"),
+                    invoices: try Self.newRowCount(db: db, table: "issued_invoice"),
+                    templates: incomingHasTemplates
+                        ? try Self.newRowCount(db: db, table: "service_template")
+                        : 0
                 )
-                WHERE singleton = 1
-                """)
-            try db.execute(sql: "INSERT OR IGNORE INTO app_setting SELECT * FROM incoming.app_setting")
+                let report = DatabaseMergeReport(counts: counts, conflicts: conflicts)
+                guard conflicts.isEmpty else { return report }
+                guard !dryRun else { return report }
+
+                try db.execute(sql: "INSERT OR IGNORE INTO business_profile SELECT * FROM incoming.business_profile")
+                if incomingHasTemplates {
+                    try db.execute(sql: "INSERT OR IGNORE INTO service_template SELECT * FROM incoming.service_template")
+                }
+                try db.execute(sql: "INSERT OR IGNORE INTO customer SELECT * FROM incoming.customer")
+                try db.execute(sql: "INSERT OR IGNORE INTO site SELECT * FROM incoming.site")
+                try db.execute(sql: "INSERT OR IGNORE INTO visit SELECT * FROM incoming.visit")
+                try db.execute(sql: "INSERT OR IGNORE INTO invoice_draft SELECT * FROM incoming.invoice_draft")
+                try db.execute(sql: "INSERT OR IGNORE INTO issued_invoice SELECT * FROM incoming.issued_invoice")
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO invoice_visit_link(invoice_id, visit_id)
+                    SELECT link.invoice_id, link.visit_id
+                    FROM incoming.invoice_visit_link AS link
+                    JOIN incoming.issued_invoice AS invoice ON invoice.id = link.invoice_id
+                    ORDER BY CASE
+                        WHEN invoice.status IN ('issued', 'paid', 'needsRecovery') THEN 1
+                        ELSE 0
+                    END, invoice.issued_at, link.invoice_id, link.visit_id
+                    """)
+                try db.execute(sql: """
+                    INSERT INTO invoice_sequence(year, next_value)
+                    SELECT year, next_value FROM incoming.invoice_sequence
+                    ON CONFLICT(year) DO UPDATE SET next_value = MAX(next_value, excluded.next_value)
+                    """)
+                try db.execute(sql: """
+                    UPDATE entitlement_usage
+                    SET first_clean_invoice_id = COALESCE(
+                        first_clean_invoice_id,
+                        (SELECT first_clean_invoice_id FROM incoming.entitlement_usage WHERE singleton = 1)
+                    )
+                    WHERE singleton = 1
+                    """)
+                try db.execute(sql: "INSERT OR IGNORE INTO app_setting SELECT * FROM incoming.app_setting")
+                return report
+            }
+            try writer.writeWithoutTransaction { db in
+                try db.execute(sql: "DETACH DATABASE incoming")
+            }
             return report
+        } catch {
+            try? writer.writeWithoutTransaction { db in
+                try db.execute(sql: "DETACH DATABASE incoming")
+            }
+            throw error
         }
     }
 
