@@ -3,7 +3,7 @@ import GRDB
 import InvoiceDomain
 
 public actor AppDatabase {
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
 
     private let writer: DatabasePool
 
@@ -194,6 +194,21 @@ public actor AppDatabase {
             try db.execute(
                 sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
                 arguments: ["v5-correction-link-guard", Date().timeIntervalSince1970, "schema-v5"]
+            )
+        }
+        migrator.registerMigration("v6-durable-free-allowance") { db in
+            try db.execute(sql: """
+                UPDATE entitlement_usage
+                SET first_clean_invoice_id = (
+                    SELECT id FROM issued_invoice ORDER BY issued_at, id LIMIT 1
+                )
+                WHERE singleton = 1
+                  AND first_clean_invoice_id IS NULL
+                  AND EXISTS (SELECT 1 FROM issued_invoice)
+                """)
+            try db.execute(
+                sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
+                arguments: ["v6-durable-free-allowance", Date().timeIntervalSince1970, "schema-v6"]
             )
         }
         return migrator
@@ -575,8 +590,15 @@ public actor AppDatabase {
             if consumeFreeAllowance {
                 let current: String? = try String.fetchOne(db, sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1")
                 guard current == nil else { throw InvoiceError.entitlementRequired }
-                try db.execute(sql: "UPDATE entitlement_usage SET first_clean_invoice_id = ? WHERE singleton = 1", arguments: [stored.id.uuidString.lowercased()])
             }
+            try db.execute(
+                sql: """
+                    UPDATE entitlement_usage
+                    SET first_clean_invoice_id = COALESCE(first_clean_invoice_id, ?)
+                    WHERE singleton = 1
+                    """,
+                arguments: [stored.id.uuidString.lowercased()]
+            )
             try db.execute(sql: """
                 INSERT INTO file_operation_journal(id, invoice_id, staged_path, final_path, sha256, state, created_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', ?)
@@ -953,10 +975,12 @@ public actor AppDatabase {
             }
         }
         let liveConsumedIssueID: String? = try writer.read { db in
-            try String.fetchOne(
-                db,
-                sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
-            )
+            try String.fetchOne(db, sql: """
+                SELECT COALESCE(
+                    (SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1),
+                    (SELECT id FROM issued_invoice ORDER BY issued_at, id LIMIT 1)
+                )
+                """)
         }
         let liveCommittedDeletionID: String? = try writer.read { db in
             try String.fetchOne(

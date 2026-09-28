@@ -194,6 +194,72 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(next, "2026-0003")
     }
 
+    func testProIssuePersistsFreeAllowanceAcrossEmptyReplaceRestore() async throws {
+        let emptyRoot = try temporaryDirectory()
+        let liveRoot = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: emptyRoot)
+            try? FileManager.default.removeItem(at: liveRoot)
+        }
+
+        let emptyDatabase = try AppDatabase(path: emptyRoot.appendingPathComponent("data.sqlite").path)
+        let emptyPackage = emptyRoot.appendingPathComponent("Empty.invoicebackup", isDirectory: true)
+        try await BackupService(database: emptyDatabase, filesRoot: emptyRoot)
+            .export(to: emptyPackage, appBuild: "tests")
+
+        let liveDatabasePath = liveRoot.appendingPathComponent("data.sqlite").path
+        let liveDatabase = try AppDatabase(path: liveDatabasePath)
+        let fixture = try await seed(database: liveDatabase)
+        let issueService = IssueService(database: liveDatabase, filesRoot: liveRoot) { _ in
+            Data("pro-issued-pdf".utf8)
+        }
+        let proInvoice = try await issueService.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+
+        let rawMarker = try DatabaseQueue(path: liveDatabasePath).read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
+            )
+        }
+        XCTAssertEqual(rawMarker, proInvoice.id.uuidString.lowercased())
+
+        // Simulate a database created by the previous schema, which derived this value at read time.
+        try DatabaseQueue(path: liveDatabasePath).write { db in
+            try db.execute(
+                sql: "UPDATE entitlement_usage SET first_clean_invoice_id = NULL WHERE singleton = 1"
+            )
+        }
+        let legacyDerivedUsage = try await liveDatabase.entitlementUsage(hasPro: false)
+        XCTAssertEqual(legacyDerivedUsage.firstCleanInvoiceID, proInvoice.id)
+
+        _ = try await BackupService(database: liveDatabase, filesRoot: liveRoot)
+            .restore(packageURL: emptyPackage, mode: .replace)
+
+        let restoredInvoices = try await liveDatabase.invoices()
+        XCTAssertTrue(restoredInvoices.isEmpty)
+        let restoredUsage = try await liveDatabase.entitlementUsage(hasPro: false)
+        XCTAssertEqual(restoredUsage.firstCleanInvoiceID, proInvoice.id)
+
+        let newFixture = try await seed(database: liveDatabase)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await issueService.issue(
+                draft: newFixture.draft,
+                business: newFixture.business,
+                customer: newFixture.customer,
+                sites: [newFixture.site.id: newFixture.site],
+                visits: [newFixture.visit],
+                hasPro: false
+            )
+        }
+    }
+
     func testReplaceRestoreCopiesSourceBeforeReplacingInvoiceDirectory() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
