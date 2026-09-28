@@ -247,7 +247,8 @@ final class InvoicePersistenceTests: XCTestCase {
             hasPro: true
         )
 
-        let rawMarker = try DatabaseQueue(path: liveDatabasePath).read { db in
+        let legacyDatabase = try DatabaseQueue(path: liveDatabasePath)
+        let rawMarker = try await legacyDatabase.read { db in
             try String.fetchOne(
                 db,
                 sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
@@ -256,7 +257,7 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(rawMarker, proInvoice.id.uuidString.lowercased())
 
         // Simulate a database created by the previous schema, which derived this value at read time.
-        try DatabaseQueue(path: liveDatabasePath).write { db in
+        try await legacyDatabase.write { db in
             try db.execute(
                 sql: "UPDATE entitlement_usage SET first_clean_invoice_id = NULL WHERE singleton = 1"
             )
