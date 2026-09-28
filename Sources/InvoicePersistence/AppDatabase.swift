@@ -1074,6 +1074,7 @@ public actor AppDatabase {
                 try db.execute(sql: """
                     INSERT INTO invoice_sequence(year, next_value)
                     SELECT year, next_value FROM incoming.invoice_sequence
+                    WHERE 1
                     ON CONFLICT(year) DO UPDATE SET next_value = MAX(next_value, excluded.next_value)
                     """)
                 try db.execute(sql: """
