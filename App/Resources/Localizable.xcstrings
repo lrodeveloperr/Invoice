@@ -62,7 +62,7 @@
     "preview.title" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Preview and issue" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "プレビュー・発行" } } } },
     "pro.active" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Pro unlocked" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "Pro購入済み" } } } },
     "pro.buyFormat" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unlock Pro — %@ once" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "Proを購入 — %@（買い切り）" } } } },
-    "pro.feature.backup" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Local export and restore" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "ローカルの書き出しと復元" } } } },
+    "pro.feature.once" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "One-time purchase, no subscription" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "買い切り・サブスクリプションなし" } } } },
     "pro.feature.customers" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unlimited active customers" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "取引先数の制限なし" } } } },
     "pro.feature.invoices" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unlimited clean invoice issues" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "正式な請求書を無制限に発行" } } } },
     "pro.free" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Free" } }, "ja" : { "stringUnit" : { "state" : "translated", "value" : "無料版" } } } },

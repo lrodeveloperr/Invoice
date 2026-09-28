@@ -122,7 +122,7 @@ struct ProSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Label(language.text("pro.feature.customers"), systemImage: "person.2")
                     Label(language.text("pro.feature.invoices"), systemImage: "doc.text")
-                    Label(language.text("pro.feature.backup"), systemImage: "externaldrive")
+                    Label(language.text("pro.feature.once"), systemImage: "creditcard")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()

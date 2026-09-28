@@ -406,8 +406,10 @@ final class InvoicePersistenceTests: XCTestCase {
 
         let drafts = try await database.drafts()
         XCTAssertEqual(drafts.map(\.id), [fixture.draft.id])
-        XCTAssertEqual(try await database.draft(id: fixture.draft.id), fixture.draft)
-        XCTAssertNil(try await database.draft(id: UUID()))
+        let exactDraft = try await database.draft(id: fixture.draft.id)
+        let missingDraft = try await database.draft(id: UUID())
+        XCTAssertEqual(exactDraft, fixture.draft)
+        XCTAssertNil(missingDraft)
     }
 
     func testCanonicalPDFReadVerifiesStoredHash() async throws {
@@ -421,7 +423,8 @@ final class InvoicePersistenceTests: XCTestCase {
             draft: fixture.draft, business: fixture.business, customer: fixture.customer,
             sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
         )
-        XCTAssertEqual(try await service.canonicalPDFData(for: invoice), expected)
+        let canonicalData = try await service.canonicalPDFData(for: invoice)
+        XCTAssertEqual(canonicalData, expected)
 
         let path = try XCTUnwrap(invoice.pdfRelativePath)
         try Data("tampered".utf8).write(to: root.appendingPathComponent(path), options: .atomic)
@@ -442,11 +445,16 @@ final class InvoicePersistenceTests: XCTestCase {
         )
 
         try await database.deleteAllDomainData()
-        XCTAssertNil(try await database.business())
-        XCTAssertTrue(try await database.customers().isEmpty)
-        XCTAssertTrue(try await database.visits().isEmpty)
-        XCTAssertTrue(try await database.invoices().isEmpty)
-        XCTAssertNil(try await database.entitlementUsage(hasPro: false).firstCleanInvoiceID)
+        let business = try await database.business()
+        let customers = try await database.customers()
+        let visits = try await database.visits()
+        let invoices = try await database.invoices()
+        let entitlement = try await database.entitlementUsage(hasPro: false)
+        XCTAssertNil(business)
+        XCTAssertTrue(customers.isEmpty)
+        XCTAssertTrue(visits.isEmpty)
+        XCTAssertTrue(invoices.isEmpty)
+        XCTAssertNil(entitlement.firstCleanInvoiceID)
         try await database.integrityCheck()
     }
 

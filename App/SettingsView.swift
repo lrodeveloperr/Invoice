@@ -207,6 +207,7 @@ private struct AddCustomerView: View {
     @State private var name = ""
     @State private var address = ""
     @State private var saving = false
+    @State private var showPro = false
 
     var body: some View {
         NavigationStack {
@@ -223,6 +224,9 @@ private struct AddCustomerView: View {
                 }
             }
         }
+        .sheet(isPresented: $showPro) {
+            ProSheet(language: language).environmentObject(store)
+        }
     }
 
     private func save() {
@@ -232,6 +236,8 @@ private struct AddCustomerView: View {
             do {
                 _ = try await model.addCustomer(name: name, address: address, hasPro: store.hasPro)
                 dismiss()
+            } catch let error as InvoiceError where error == .entitlementRequired {
+                showPro = true
             } catch {
                 model.errorMessage = String(describing: error)
             }
