@@ -17,14 +17,23 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            Tab(language.text("tab.work"), systemImage: "wrench.and.screwdriver", value: AppTab.work) {
+            Tab(value: AppTab.work) {
                 WorkSplitView(language: language)
+            } label: {
+                Label(language.text("tab.work"), systemImage: "wrench.and.screwdriver")
+                    .accessibilityIdentifier("tab.work")
             }
-            Tab(language.text("tab.invoices"), systemImage: "doc.text", value: AppTab.invoices) {
+            Tab(value: AppTab.invoices) {
                 InvoiceSplitView(language: language)
+            } label: {
+                Label(language.text("tab.invoices"), systemImage: "doc.text")
+                    .accessibilityIdentifier("tab.invoices")
             }
-            Tab(language.text("tab.settings"), systemImage: "gearshape", value: AppTab.settings) {
+            Tab(value: AppTab.settings) {
                 SettingsView(languageCode: $languageCode, language: language)
+            } label: {
+                Label(language.text("tab.settings"), systemImage: "gearshape")
+                    .accessibilityIdentifier("tab.settings")
             }
         }
         .tabViewStyle(.sidebarAdaptable)

@@ -52,6 +52,7 @@ struct WorkSplitView: View {
                     } label: {
                         Label(language.text("work.buildInvoice"), systemImage: "doc.badge.plus")
                     }
+                    .accessibilityIdentifier("work.createInvoice")
                     Button {
                         selection = .newVisit
                         if horizontalSizeClass == .compact { columnVisibility = .detailOnly }

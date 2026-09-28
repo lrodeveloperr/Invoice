@@ -2,17 +2,18 @@ import XCTest
 
 @MainActor
 final class InvoiceUITests: XCTestCase {
-    private func launchApp() -> XCUIApplication {
+    private func launchApp(accessibilitySize: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append("-ui-testing")
+        if accessibilitySize {
+            app.launchEnvironment["UIPreferredContentSizeCategoryName"] = "UICTContentSizeCategoryAccessibilityXXXL"
+        }
         app.launch()
         return app
     }
 
-    private func element(_ app: XCUIApplication, japanese: String, english: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@ OR label == %@", japanese, english)
-        ).firstMatch
+    private func identified(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
     private func attachScreenshot(_ name: String) {
@@ -25,9 +26,9 @@ final class InvoiceUITests: XCTestCase {
     func testThreePrimaryDestinationsRemainReachableAfterRotation() throws {
         continueAfterFailure = false
         let app = launchApp()
-        let work = element(app, japanese: "作業", english: "Work")
-        let invoices = element(app, japanese: "請求書", english: "Invoices")
-        let settings = element(app, japanese: "設定", english: "Settings")
+        let work = identified(app, "tab.work")
+        let invoices = identified(app, "tab.invoices")
+        let settings = identified(app, "tab.settings")
         XCTAssertTrue(work.waitForExistence(timeout: 15))
         XCTAssertTrue(invoices.waitForExistence(timeout: 5))
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
@@ -46,12 +47,9 @@ final class InvoiceUITests: XCTestCase {
 
     func testLargeContentSizeKeepsInvoiceCreationReachable() throws {
         continueAfterFailure = false
-        let app = launchApp()
-        app.terminate()
-        app.launchEnvironment["UIPreferredContentSizeCategoryName"] = "UICTContentSizeCategoryAccessibilityXXXL"
-        app.launch()
+        let app = launchApp(accessibilitySize: true)
 
-        let createInvoice = element(app, japanese: "請求書を作成", english: "Create invoice")
+        let createInvoice = identified(app, "work.createInvoice")
         XCTAssertTrue(createInvoice.waitForExistence(timeout: 10))
         XCTAssertTrue(createInvoice.isHittable)
         attachScreenshot("accessibility-xxxl")
