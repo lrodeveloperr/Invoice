@@ -20,6 +20,14 @@ struct WorkSplitView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selection) {
+                Section {
+                    Button(action: openInvoiceBuilder) {
+                        Label(language.text("work.buildInvoice"), systemImage: "doc.badge.plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .accessibilityIdentifier("work.createInvoice")
+                }
+
                 if model.customers.isEmpty {
                     ContentUnavailableView(
                         language.text("work.empty.title"),
@@ -46,13 +54,9 @@ struct WorkSplitView: View {
             .navigationTitle(language.text("work.title"))
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        selection = .builder
-                        if horizontalSizeClass == .compact { columnVisibility = .detailOnly }
-                    } label: {
+                    Button(action: openInvoiceBuilder) {
                         Label(language.text("work.buildInvoice"), systemImage: "doc.badge.plus")
                     }
-                    .accessibilityIdentifier("work.createInvoice")
                     Button {
                         selection = .newVisit
                         if horizontalSizeClass == .compact { columnVisibility = .detailOnly }
@@ -64,6 +68,11 @@ struct WorkSplitView: View {
         } detail: {
             detail
         }
+    }
+
+    private func openInvoiceBuilder() {
+        selection = .builder
+        if horizontalSizeClass == .compact { columnVisibility = .detailOnly }
     }
 
     @ViewBuilder
@@ -548,6 +557,7 @@ private struct InvoiceBuilderView: View {
             }
         }
         .navigationTitle(language.text("builder.title"))
+        .accessibilityIdentifier("builder.screen")
         .onAppear { initializeSelection() }
         .onChange(of: customerID) { _, _ in selectAllEligible() }
         .onChange(of: start) { _, _ in selectAllEligible() }

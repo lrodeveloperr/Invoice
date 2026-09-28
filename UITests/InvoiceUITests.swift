@@ -50,15 +50,10 @@ final class InvoiceUITests: XCTestCase {
         let app = launchApp(accessibilitySize: true)
 
         let createInvoice = identified(app, "work.createInvoice")
-        if !createInvoice.waitForExistence(timeout: 5) {
-            let more = app.buttons.matching(
-                NSPredicate(format: "label == %@ OR label == %@", "More", "その他")
-            ).firstMatch
-            XCTAssertTrue(more.waitForExistence(timeout: 5))
-            more.tap()
-        }
-        XCTAssertTrue(createInvoice.waitForExistence(timeout: 5))
+        XCTAssertTrue(createInvoice.waitForExistence(timeout: 15))
         XCTAssertTrue(createInvoice.isHittable)
         attachScreenshot("accessibility-xxxl")
+        createInvoice.tap()
+        XCTAssertTrue(identified(app, "builder.screen").waitForExistence(timeout: 5))
     }
 }
