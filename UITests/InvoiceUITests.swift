@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class InvoiceUITests: XCTestCase {
     private var app: XCUIApplication!
 
