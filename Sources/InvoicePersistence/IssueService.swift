@@ -74,6 +74,46 @@ public actor IssueService {
         )
     }
 
+    public func issueCorrectionPrepared(
+        originalID: UUID,
+        replacement: IssuedInvoice,
+        pdfData: Data,
+        hasPro: Bool
+    ) async throws -> IssuedInvoice {
+        guard let original = try await database.invoice(id: originalID),
+              original.status == .issued || original.status == .paid,
+              original.replacedByInvoiceID == nil,
+              replacement.lines.count == original.lines.count else {
+            throw InvoiceError.invalidTransition
+        }
+        for (line, source) in zip(replacement.lines, original.lines) {
+            guard line.sourceVisitID == source.sourceVisitID,
+                  line.workDate == source.workDate,
+                  line.siteName == source.siteName,
+                  line.siteAddress == source.siteAddress else {
+                throw InvoiceError.corruptData("correction_source_mismatch")
+            }
+        }
+        let expected = try InvoiceCalculator.correctionSnapshot(
+            id: replacement.id,
+            number: replacement.number,
+            original: original,
+            issueDate: replacement.issueDate,
+            dueDate: replacement.dueDate,
+            lines: replacement.lines.map(InvoiceCorrectionLine.init(invoiceLine:)),
+            issuedAt: replacement.issuedAt
+        )
+        guard Self.equivalentForCorrection(replacement, expected) else {
+            throw InvoiceError.corruptData("prepared_correction_mismatch")
+        }
+        return try await commitCorrection(
+            originalID: originalID,
+            replacement: replacement,
+            pdfData: pdfData,
+            hasPro: hasPro
+        )
+    }
+
     private func commit(
         invoice: IssuedInvoice,
         pdfData: Data,
@@ -124,6 +164,58 @@ public actor IssueService {
         storedInvoice.pdfRelativePath = finalRelative
         storedInvoice.pdfSHA256 = hash
         return storedInvoice
+    }
+
+    private func commitCorrection(
+        originalID: UUID,
+        replacement: IssuedInvoice,
+        pdfData: Data,
+        hasPro: Bool
+    ) async throws -> IssuedInvoice {
+        let entitlement = try await database.entitlementUsage(hasPro: hasPro)
+        guard entitlement.permitsCleanIssue else { throw InvoiceError.entitlementRequired }
+        guard !pdfData.isEmpty else { throw InvoiceError.corruptData("empty_pdf") }
+        let hash = SHA256.hash(data: pdfData).map { String(format: "%02x", $0) }.joined()
+
+        let stagingDirectory = filesRoot.appendingPathComponent("Staging", isDirectory: true)
+        let finalDirectory = filesRoot.appendingPathComponent("Invoices", isDirectory: true)
+        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: finalDirectory, withIntermediateDirectories: true)
+        let filename = replacement.id.uuidString.lowercased() + ".pdf"
+        let stagedURL = stagingDirectory.appendingPathComponent(filename)
+        let finalURL = finalDirectory.appendingPathComponent(filename)
+        try pdfData.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+
+        let stagedRelative = "Staging/\(filename)"
+        let finalRelative = "Invoices/\(filename)"
+        let operationID: UUID
+        do {
+            operationID = try await database.commitCorrection(
+                originalID: originalID,
+                replacement: replacement,
+                stagedPath: stagedRelative,
+                finalPath: finalRelative,
+                pdfHash: hash,
+                hasPro: hasPro
+            )
+        } catch {
+            try? fileManager.removeItem(at: stagedURL)
+            throw error
+        }
+
+        do {
+            guard !fileManager.fileExists(atPath: finalURL.path) else {
+                throw InvoiceError.corruptData("unexpected_existing_pdf")
+            }
+            try fileManager.moveItem(at: stagedURL, to: finalURL)
+            try await database.completeFileOperation(operationID)
+        } catch {
+            throw InvoiceError.corruptData("issued_pdf_needs_recovery")
+        }
+        var stored = replacement
+        stored.pdfRelativePath = finalRelative
+        stored.pdfSHA256 = hash
+        return stored
     }
 
     public func recoverPendingFileOperations() async throws {
@@ -217,6 +309,46 @@ public actor IssueService {
               lhs.status == .issued,
               lhs.paidDate == nil,
               lhs.replacesInvoiceID == nil,
+              lhs.replacedByInvoiceID == nil,
+              lhs.pdfRelativePath == nil,
+              lhs.pdfSHA256 == nil,
+              lhs.issuedAt == rhs.issuedAt,
+              lhs.lines.count == rhs.lines.count else { return false }
+        return zip(lhs.lines, rhs.lines).allSatisfy { left, right in
+            left.sourceVisitID == right.sourceVisitID &&
+            left.workDate == right.workDate &&
+            left.siteName == right.siteName &&
+            left.siteAddress == right.siteAddress &&
+            left.position == right.position &&
+            left.description == right.description &&
+            left.quantity == right.quantity &&
+            left.unit == right.unit &&
+            left.unitPrice == right.unitPrice &&
+            left.taxRate == right.taxRate &&
+            left.net == right.net
+        }
+    }
+
+    private static func equivalentForCorrection(_ lhs: IssuedInvoice, _ rhs: IssuedInvoice) -> Bool {
+        guard lhs.id == rhs.id,
+              lhs.number == rhs.number,
+              lhs.issueDate == rhs.issueDate,
+              lhs.dueDate == rhs.dueDate,
+              lhs.coveredStart == rhs.coveredStart,
+              lhs.coveredEnd == rhs.coveredEnd,
+              lhs.issuer == rhs.issuer,
+              lhs.customerID == rhs.customerID,
+              lhs.customerName == rhs.customerName,
+              lhs.customerAddress == rhs.customerAddress,
+              lhs.taxTotals == rhs.taxTotals,
+              lhs.subtotal == rhs.subtotal,
+              lhs.totalTax == rhs.totalTax,
+              lhs.grandTotal == rhs.grandTotal,
+              lhs.lineRounding == rhs.lineRounding,
+              lhs.taxRounding == rhs.taxRounding,
+              lhs.status == .issued,
+              lhs.paidDate == nil,
+              lhs.replacesInvoiceID == rhs.replacesInvoiceID,
               lhs.replacedByInvoiceID == nil,
               lhs.pdfRelativePath == nil,
               lhs.pdfSHA256 == nil,

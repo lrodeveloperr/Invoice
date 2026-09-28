@@ -31,13 +31,14 @@ public final class StoreKitEntitlementStore: ObservableObject {
         await refreshEntitlement()
         do {
             product = try await Product.products(for: [productID]).first
-            lastErrorID = nil
+            lastErrorID = product == nil ? "storekit_product_unavailable" : nil
         } catch {
             lastErrorID = "storekit_product_load_failed"
         }
     }
 
     public func purchase() async -> Bool {
+        lastErrorID = nil
         guard let product else { lastErrorID = "storekit_product_unavailable"; return false }
         do {
             switch try await product.purchase() {
@@ -63,9 +64,11 @@ public final class StoreKitEntitlementStore: ObservableObject {
     }
 
     public func restorePurchase() async {
+        lastErrorID = nil
         do {
             try await AppStore.sync()
             await refreshEntitlement()
+            if !hasPro { lastErrorID = "storekit_restore_not_found" }
         } catch {
             lastErrorID = "storekit_restore_failed"
         }

@@ -1,0 +1,43 @@
+{
+  "identifier" : "3F9A2FC4-9D0A-44A1-8C47-33A3A8DE53C9",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "2000",
+      "familyShareable" : false,
+      "internalID" : "6816749254",
+      "localizations" : [
+        {
+          "description" : "取引先数と請求書発行数の制限を解除し、作業テンプレート、支払条件、ロゴ、PDFデザインを利用できます。",
+          "displayName" : "買い切りPro",
+          "locale" : "ja_JP"
+        },
+        {
+          "description" : "Unlock unlimited customers and invoices, service templates, saved terms, a business logo and PDF designs.",
+          "displayName" : "Lifetime Pro",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.worksbien.serviceinvoice.pro.lifetime",
+      "referenceName" : "Dated Service Invoice Pro Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "ja_JP",
+    "_storefront" : "JPN",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

@@ -14,24 +14,49 @@ public enum CanonicalPDFRenderer {
             kCGPDFContextCreator as String: "Dated Service Invoice"
         ]
         return UIGraphicsPDFRenderer(bounds: bounds, format: format).pdfData { context in
-            for page in plan.pages {
+            for (pageIndex, page) in plan.pages.enumerated() {
                 context.beginPage()
                 UIColor.white.setFill()
                 context.cgContext.fill(bounds)
-                for block in page.blocks { draw(block) }
+                for block in page.blocks { draw(block, pdfStyle: invoice.issuer.effectivePDFStyle) }
+                if pageIndex == 0,
+                   let logoData = invoice.issuer.logoPNGData,
+                   let logo = UIImage(data: logoData) {
+                    let size = CGSize(width: 54, height: 54)
+                    let rect = CGRect(
+                        x: bounds.maxX - PDFLayoutPlan.margin - size.width,
+                        y: PDFLayoutPlan.margin,
+                        width: size.width,
+                        height: size.height
+                    )
+                    logo.draw(in: rect)
+                }
             }
         }
     }
 
-    private static func draw(_ block: PDFTextBlock) {
+    private static func draw(_ block: PDFTextBlock, pdfStyle: PDFStyle) {
         let font: UIFont
         let color: UIColor
         let alignment: NSTextAlignment
+        let accent = UIColor(red: 0.08, green: 0.25, blue: 0.42, alpha: 1)
         switch block.style {
-        case .title: font = .systemFont(ofSize: 24, weight: .bold); color = .label; alignment = .left
-        case .heading: font = .systemFont(ofSize: 11, weight: .semibold); color = .label; alignment = .left
-        case .body: font = .systemFont(ofSize: 9, weight: .regular); color = .label; alignment = .left
-        case .amount: font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold); color = .label; alignment = .right
+        case .title:
+            font = .systemFont(ofSize: pdfStyle == .compact ? 20 : 24, weight: .bold)
+            color = pdfStyle == .modern ? accent : .label
+            alignment = .left
+        case .heading:
+            font = .systemFont(ofSize: pdfStyle == .compact ? 10 : 11, weight: .semibold)
+            color = pdfStyle == .modern ? accent : .label
+            alignment = .left
+        case .body:
+            font = .systemFont(ofSize: pdfStyle == .compact ? 8 : 9, weight: .regular)
+            color = .label
+            alignment = .left
+        case .amount:
+            font = .monospacedDigitSystemFont(ofSize: pdfStyle == .compact ? 9 : 10, weight: .semibold)
+            color = pdfStyle == .modern ? accent : .label
+            alignment = .right
         case .caption: font = .systemFont(ofSize: 9, weight: .regular); color = .secondaryLabel; alignment = .right
         }
         let paragraph = NSMutableParagraphStyle()

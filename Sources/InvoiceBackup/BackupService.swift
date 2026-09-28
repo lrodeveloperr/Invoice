@@ -168,6 +168,11 @@ public actor BackupService {
     }
 
     public func preflightRestore(packageURL: URL, mode: RestoreMode) async throws -> RestoreReport {
+        try await DeletionCoordinator(
+            database: database,
+            filesRoot: filesRoot,
+            fileManager: fileManager
+        ).reconcileInterruptedDeletion()
         let manifest = try validate(packageURL: packageURL)
         let mergeReport: DatabaseMergeReport?
         if mode == .merge {

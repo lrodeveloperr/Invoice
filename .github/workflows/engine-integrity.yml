@@ -32,12 +32,19 @@ jobs:
         run: swift run invoice-harness property
       - name: Run full engine demonstration
         run: swift run invoice-harness demo --root "${RUNNER_TEMP}/invoice-harness-ci"
+      - name: Validate StoreKit product contract
+        run: >-
+          jq -e '.products | length == 1 and
+          .[0].productID == "com.worksbien.serviceinvoice.pro.lifetime" and
+          .[0].type == "NonConsumable" and
+          .[0].displayPrice == "2000"'
+          StoreKit/Invoice.storekit
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate universal app project
         run: xcodegen generate
-      - name: Build iPhone and iPad app
+      - name: Build iPhone, iPad and UI tests
         run: >-
           xcodebuild -project Invoice.xcodeproj -scheme Invoice
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
-          CODE_SIGNING_ALLOWED=NO build
+          CODE_SIGNING_ALLOWED=NO build-for-testing

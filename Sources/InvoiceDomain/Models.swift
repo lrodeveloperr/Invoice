@@ -34,6 +34,12 @@ public struct LocalDate: Hashable, Codable, Comparable, Sendable, CustomStringCo
     }
 }
 
+public enum PDFStyle: String, CaseIterable, Codable, Sendable {
+    case classic
+    case modern
+    case compact
+}
+
 public struct BusinessProfile: Identifiable, Hashable, Codable, Sendable {
     public var id: UUID
     public var issuerName: String
@@ -43,12 +49,16 @@ public struct BusinessProfile: Identifiable, Hashable, Codable, Sendable {
     public var invoicePrefix: String
     public var lineRounding: RoundingRule
     public var taxRounding: RoundingRule
+    public var pdfStyle: PDFStyle?
+    public var logoPNGData: Data?
 
     public init(
         id: UUID = UUID(), issuerName: String, postalAddress: String = "",
         registrationNumber: String? = nil, bankDetails: String = "",
         invoicePrefix: String = "", lineRounding: RoundingRule = .halfUp,
-        taxRounding: RoundingRule = .floor
+        taxRounding: RoundingRule = .floor,
+        pdfStyle: PDFStyle? = nil,
+        logoPNGData: Data? = nil
     ) {
         self.id = id
         self.issuerName = issuerName
@@ -58,12 +68,47 @@ public struct BusinessProfile: Identifiable, Hashable, Codable, Sendable {
         self.invoicePrefix = invoicePrefix
         self.lineRounding = lineRounding
         self.taxRounding = taxRounding
+        self.pdfStyle = pdfStyle
+        self.logoPNGData = logoPNGData
     }
 
     public var registrationNumberIsValid: Bool {
         guard let registrationNumber, registrationNumber.count == 14,
               registrationNumber.first == "T" else { return registrationNumber == nil }
         return registrationNumber.dropFirst().allSatisfy(\.isNumber)
+    }
+
+    public var effectivePDFStyle: PDFStyle { pdfStyle ?? .classic }
+}
+
+public struct ServiceTemplate: Identifiable, Hashable, Codable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var unit: String
+    public var unitPrice: Money
+    public var taxRate: TaxRate
+    public var isActive: Bool
+
+    public init(
+        id: UUID = UUID(),
+        title: String,
+        unit: String,
+        unitPrice: Money,
+        taxRate: TaxRate,
+        isActive: Bool = true
+    ) {
+        self.id = id
+        self.title = title
+        self.unit = unit
+        self.unitPrice = unitPrice
+        self.taxRate = taxRate
+        self.isActive = isActive
+    }
+
+    public func validate() throws {
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw InvoiceError.missingRequiredField("template.title")
+        }
     }
 }
 
@@ -217,6 +262,57 @@ public struct IssuedInvoiceLine: Identifiable, Hashable, Codable, Sendable {
     public let unitPrice: Money
     public let taxRate: TaxRate
     public let net: Money
+}
+
+public struct InvoiceCorrectionLine: Identifiable, Hashable, Codable, Sendable {
+    public var id: UUID
+    public var sourceVisitID: UUID
+    public var workDate: LocalDate
+    public var siteName: String
+    public var siteAddress: String
+    public var description: String
+    public var quantity: Quantity
+    public var unit: String
+    public var unitPrice: Money
+    public var taxRate: TaxRate
+
+    public init(
+        id: UUID = UUID(),
+        sourceVisitID: UUID,
+        workDate: LocalDate,
+        siteName: String,
+        siteAddress: String,
+        description: String,
+        quantity: Quantity,
+        unit: String,
+        unitPrice: Money,
+        taxRate: TaxRate
+    ) {
+        self.id = id
+        self.sourceVisitID = sourceVisitID
+        self.workDate = workDate
+        self.siteName = siteName
+        self.siteAddress = siteAddress
+        self.description = description
+        self.quantity = quantity
+        self.unit = unit
+        self.unitPrice = unitPrice
+        self.taxRate = taxRate
+    }
+
+    public init(invoiceLine: IssuedInvoiceLine) {
+        self.init(
+            sourceVisitID: invoiceLine.sourceVisitID,
+            workDate: invoiceLine.workDate,
+            siteName: invoiceLine.siteName,
+            siteAddress: invoiceLine.siteAddress,
+            description: invoiceLine.description,
+            quantity: invoiceLine.quantity,
+            unit: invoiceLine.unit,
+            unitPrice: invoiceLine.unitPrice,
+            taxRate: invoiceLine.taxRate
+        )
+    }
 }
 
 public struct InvoiceTaxTotal: Hashable, Codable, Sendable {

@@ -18,6 +18,7 @@ struct InvoiceSplitView: View {
                 } else {
                     invoiceSection(.issued, key: "state.issued")
                     invoiceSection(.paid, key: "state.paid")
+                    invoiceSection(.corrected, key: "state.corrected")
                     invoiceSection(.voided, key: "state.voided")
                     invoiceSection(.needsRecovery, key: "state.needsRecovery")
                 }
@@ -80,6 +81,7 @@ private struct InvoiceDetailView: View {
     @State private var pdfData: Data?
     @State private var sharedFile: SharedFile?
     @State private var confirmVoid = false
+    @State private var showCorrection = false
 
     var body: some View {
         Group {
@@ -116,6 +118,11 @@ private struct InvoiceDetailView: View {
                     }
                 }
                 if invoice.status == .issued || invoice.status == .paid {
+                    Button {
+                        showCorrection = true
+                    } label: {
+                        Label(language.text("correction.action"), systemImage: "doc.badge.arrow.up")
+                    }
                     Button(role: .destructive) {
                         confirmVoid = true
                     } label: {
@@ -126,6 +133,9 @@ private struct InvoiceDetailView: View {
         }
         .task(id: invoice.id) { await loadPDF() }
         .sheet(item: $sharedFile) { ShareSheet(items: [$0.url]) }
+        .sheet(isPresented: $showCorrection) {
+            CorrectionFlowView(original: invoice, language: language)
+        }
         .confirmationDialog(language.text("invoice.void.confirmTitle"), isPresented: $confirmVoid) {
             Button(language.text("invoice.void"), role: .destructive) {
                 Task { await model.void(invoice) }

@@ -70,6 +70,19 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension:
                 - datedinvoicebackup
+  InvoiceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Invoice
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.worksbienstudios.serviceinvoicejp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
 schemes:
   Invoice:
     build:
@@ -77,5 +90,10 @@ schemes:
         Invoice: all
     run:
       config: Debug
+      storeKitConfiguration: StoreKit/Invoice.storekit
+    test:
+      config: Debug
+      targets:
+        - InvoiceUITests
     archive:
       config: Release

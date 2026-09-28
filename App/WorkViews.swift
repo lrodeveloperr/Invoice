@@ -193,6 +193,7 @@ private struct VisitEditorView: View {
     @AppStorage("visitDraft.note") private var note = ""
     @State private var saving = false
     @State private var showPro = false
+    @State private var templateID: UUID?
 
     private var previousVisit: Visit? {
         model.visits
@@ -237,6 +238,18 @@ private struct VisitEditorView: View {
 
     var body: some View {
         Form {
+            if !model.serviceTemplates.filter(\.isActive).isEmpty {
+                Section(language.text("template.use")) {
+                    Picker(language.text("template.choose"), selection: $templateID) {
+                        Text(language.text("field.choose")).tag(UUID?.none)
+                        ForEach(model.serviceTemplates.filter(\.isActive)) { template in
+                            Text(template.title).tag(Optional(template.id))
+                        }
+                    }
+                } footer: {
+                    Text(store.hasPro ? language.text("template.useNote") : language.text("template.pro"))
+                }
+            }
             if previousVisit != nil {
                 Section {
                     Button {
@@ -307,6 +320,19 @@ private struct VisitEditorView: View {
         }
         .sheet(isPresented: $showPro) {
             ProSheet(language: language).environmentObject(store)
+        }
+        .onChange(of: templateID) { _, id in
+            guard let id,
+                  let template = model.serviceTemplates.first(where: { $0.id == id }) else { return }
+            guard store.hasPro else {
+                templateID = nil
+                showPro = true
+                return
+            }
+            description = template.title
+            unit = template.unit
+            unitPrice = String(template.unitPrice.yen)
+            taxBasisPoints = template.taxRate.basisPoints
         }
     }
 
@@ -471,6 +497,14 @@ private struct InvoiceBuilderView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityValue(
+                            language.text(
+                                selected.contains(visit.id)
+                                    ? "accessibility.selected"
+                                    : "accessibility.notSelected"
+                            )
+                        )
+                        .accessibilityAddTraits(selected.contains(visit.id) ? .isSelected : [])
                     }
                 }
             }

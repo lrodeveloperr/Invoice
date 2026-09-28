@@ -107,6 +107,81 @@ public enum InvoiceCalculator {
             pdfRelativePath: nil, pdfSHA256: nil, issuedAt: issuedAt
         )
     }
+
+    public static func correctionSnapshot(
+        id: UUID = UUID(),
+        number: String,
+        original: IssuedInvoice,
+        issueDate: LocalDate,
+        dueDate: LocalDate,
+        lines: [InvoiceCorrectionLine],
+        issuedAt: Date = Date()
+    ) throws -> IssuedInvoice {
+        guard !number.isEmpty else { throw InvoiceError.missingRequiredField("invoice.number") }
+        guard original.status == .issued || original.status == .paid,
+              original.replacedByInvoiceID == nil,
+              original.pdfRelativePath != nil,
+              original.pdfSHA256 != nil else {
+            throw InvoiceError.invalidTransition
+        }
+        guard issueDate <= dueDate, !lines.isEmpty else { throw InvoiceError.invalidDate }
+        let originalVisitIDs = Set(original.lines.map(\.sourceVisitID))
+        guard Set(lines.map(\.sourceVisitID)) == originalVisitIDs else {
+            throw InvoiceError.invalidTransition
+        }
+
+        let snapshotLines = try lines.enumerated().map { position, line in
+            let description = line.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !description.isEmpty else {
+                throw InvoiceError.missingRequiredField("line.description")
+            }
+            let net = try line.quantity.multiplied(
+                by: line.unitPrice,
+                rounding: original.lineRounding
+            )
+            return IssuedInvoiceLine(
+                id: UUID(),
+                sourceVisitID: line.sourceVisitID,
+                workDate: line.workDate,
+                siteName: line.siteName,
+                siteAddress: line.siteAddress,
+                position: position,
+                description: description,
+                quantity: line.quantity,
+                unit: line.unit,
+                unitPrice: line.unitPrice,
+                taxRate: line.taxRate,
+                net: net
+            )
+        }
+        let totals = try totals(lines: snapshotLines, taxRounding: original.taxRounding)
+        return IssuedInvoice(
+            id: id,
+            number: number,
+            issueDate: issueDate,
+            dueDate: dueDate,
+            coveredStart: original.coveredStart,
+            coveredEnd: original.coveredEnd,
+            issuer: original.issuer,
+            customerID: original.customerID,
+            customerName: original.customerName,
+            customerAddress: original.customerAddress,
+            lines: snapshotLines,
+            taxTotals: totals.taxes,
+            subtotal: totals.subtotal,
+            totalTax: totals.totalTax,
+            grandTotal: totals.grandTotal,
+            lineRounding: original.lineRounding,
+            taxRounding: original.taxRounding,
+            status: .issued,
+            paidDate: nil,
+            replacesInvoiceID: original.id,
+            replacedByInvoiceID: nil,
+            pdfRelativePath: nil,
+            pdfSHA256: nil,
+            issuedAt: issuedAt
+        )
+    }
 }
 
 public struct InvoiceNumberAllocator: Sendable {

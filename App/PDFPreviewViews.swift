@@ -132,9 +132,17 @@ struct ProSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Label(language.text("pro.feature.customers"), systemImage: "person.2")
                     Label(language.text("pro.feature.invoices"), systemImage: "doc.text")
+                    Label(language.text("pro.feature.templates"), systemImage: "list.bullet.rectangle")
+                    Label(language.text("pro.feature.branding"), systemImage: "paintbrush")
                     Label(language.text("pro.feature.once"), systemImage: "creditcard")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                if let errorID = store.lastErrorID {
+                    Label(language.errorText(id: errorID), systemImage: "exclamationmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Spacer()
                 Button {
                     purchasing = true
@@ -154,6 +162,11 @@ struct ProSheet: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(purchasing || store.product == nil)
+                if store.product == nil {
+                    Button(language.text("store.retry")) {
+                        Task { await store.load() }
+                    }
+                }
                 Button(language.text("pro.restore")) {
                     Task {
                         await store.restorePurchase()

@@ -3,7 +3,7 @@ import GRDB
 import InvoiceDomain
 
 public actor AppDatabase {
-    public static let schemaVersion = 3
+    public static let schemaVersion = 4
 
     private let writer: DatabasePool
 
@@ -156,6 +156,19 @@ public actor AppDatabase {
                 arguments: ["v3-active-invoice-status-guard", Date().timeIntervalSince1970, "schema-v3"]
             )
         }
+        migrator.registerMigration("v4-service-templates") { db in
+            try db.create(table: "service_template") { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text).notNull().indexed()
+                t.column("is_active", .boolean).notNull().indexed()
+                t.column("payload", .blob).notNull()
+                t.column("updated_at", .double).notNull()
+            }
+            try db.execute(
+                sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
+                arguments: ["v4-service-templates", Date().timeIntervalSince1970, "schema-v4"]
+            )
+        }
         return migrator
     }
 
@@ -173,6 +186,37 @@ public actor AppDatabase {
         try writer.read { db in
             guard let data: Data = try Data.fetchOne(db, sql: "SELECT payload FROM business_profile LIMIT 1") else { return nil }
             return try Self.decode(BusinessProfile.self, from: data)
+        }
+    }
+
+    public func saveServiceTemplate(_ template: ServiceTemplate, hasPro: Bool) throws {
+        guard hasPro else { throw InvoiceError.entitlementRequired }
+        try template.validate()
+        let payload = try Self.encode(template)
+        try writer.write { db in
+            try db.execute(sql: """
+                INSERT INTO service_template(id, title, is_active, payload, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET title = excluded.title,
+                    is_active = excluded.is_active, payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """, arguments: [
+                    template.id.uuidString.lowercased(),
+                    template.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                    template.isActive,
+                    payload,
+                    Date().timeIntervalSince1970
+                ])
+        }
+    }
+
+    public func serviceTemplates(activeOnly: Bool = false) throws -> [ServiceTemplate] {
+        try writer.read { db in
+            let filter = activeOnly ? " WHERE is_active = 1" : ""
+            return try Row.fetchAll(
+                db,
+                sql: "SELECT id, title, is_active, payload FROM service_template\(filter) ORDER BY title, id"
+            ).map(Self.validatedServiceTemplate)
         }
     }
 
@@ -385,6 +429,7 @@ public actor AppDatabase {
             try db.execute(sql: "DELETE FROM invoice_visit_link")
             try db.execute(sql: "DELETE FROM issued_invoice")
             try db.execute(sql: "DELETE FROM invoice_draft")
+            try db.execute(sql: "DELETE FROM service_template")
             try db.execute(sql: "DELETE FROM visit")
             try db.execute(sql: "DELETE FROM site")
             try db.execute(sql: "DELETE FROM customer")
@@ -417,7 +462,7 @@ public actor AppDatabase {
     public func domainIsEmpty() throws -> Bool {
         try writer.read { db in
             for table in [
-                "business_profile", "customer", "site", "visit", "invoice_draft", "issued_invoice"
+                "business_profile", "service_template", "customer", "site", "visit", "invoice_draft", "issued_invoice"
             ] {
                 let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
                 if count != 0 { return false }
@@ -494,6 +539,138 @@ public actor AppDatabase {
                 INSERT INTO file_operation_journal(id, invoice_id, staged_path, final_path, sha256, state, created_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', ?)
                 """, arguments: [operationID.uuidString.lowercased(), stored.id.uuidString.lowercased(), stagedPath, finalPath, pdfHash, Date().timeIntervalSince1970])
+        }
+        return operationID
+    }
+
+    public func commitCorrection(
+        originalID: UUID,
+        replacement: IssuedInvoice,
+        stagedPath: String,
+        finalPath: String,
+        pdfHash: String,
+        hasPro: Bool
+    ) throws -> UUID {
+        guard replacement.replacesInvoiceID == originalID,
+              replacement.replacedByInvoiceID == nil,
+              replacement.status == .issued,
+              replacement.paidDate == nil,
+              replacement.pdfRelativePath == nil,
+              replacement.pdfSHA256 == nil,
+              replacement.id != originalID else {
+            throw InvoiceError.invalidTransition
+        }
+        let replacementVisitIDs = Set(replacement.lines.map(\.sourceVisitID))
+        guard !replacementVisitIDs.isEmpty else { throw InvoiceError.emptyInvoice }
+        let operationID = UUID()
+
+        try writer.write { db in
+            let freeIssueID: String? = try String.fetchOne(
+                db,
+                sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
+            )
+            guard hasPro || freeIssueID == nil else { throw InvoiceError.entitlementRequired }
+
+            guard let originalRow = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, number, customer_id, status, issue_date,
+                           pdf_relative_path, pdf_sha256, payload, issued_at
+                    FROM issued_invoice WHERE id = ?
+                    """,
+                arguments: [originalID.uuidString.lowercased()]
+            ) else { throw InvoiceError.corruptData("missing_invoice") }
+            var original = try Self.validatedIssuedInvoice(originalRow)
+            guard original.status == .issued || original.status == .paid,
+                  original.replacedByInvoiceID == nil else {
+                throw InvoiceError.invalidTransition
+            }
+
+            let linkedVisitStrings = try String.fetchAll(
+                db,
+                sql: "SELECT visit_id FROM invoice_visit_link WHERE invoice_id = ? ORDER BY visit_id",
+                arguments: [originalID.uuidString.lowercased()]
+            )
+            let linkedVisitIDs = Set(linkedVisitStrings.compactMap(UUID.init(uuidString:)))
+            guard linkedVisitIDs.count == linkedVisitStrings.count,
+                  linkedVisitIDs == replacementVisitIDs else {
+                throw InvoiceError.invalidTransition
+            }
+
+            let expected = try Int.fetchOne(
+                db,
+                sql: "SELECT next_value FROM invoice_sequence WHERE year = ?",
+                arguments: [replacement.issueDate.year]
+            ) ?? 1
+            let expectedNumber = try InvoiceNumberAllocator().number(
+                issueDate: replacement.issueDate,
+                prefix: replacement.issuer.invoicePrefix,
+                sequence: expected
+            )
+            guard expectedNumber == replacement.number else { throw InvoiceError.invalidTransition }
+
+            var stored = replacement
+            stored.pdfRelativePath = finalPath
+            stored.pdfSHA256 = pdfHash
+            original.status = .corrected
+            original.replacedByInvoiceID = stored.id
+            try db.execute(
+                sql: "UPDATE issued_invoice SET status = ?, payload = ? WHERE id = ?",
+                arguments: [
+                    InvoiceStatus.corrected.rawValue,
+                    try Self.encode(original),
+                    originalID.uuidString.lowercased()
+                ]
+            )
+
+            try db.execute(sql: """
+                INSERT INTO issued_invoice(id, number, customer_id, status, issue_date,
+                    pdf_relative_path, pdf_sha256, payload, issued_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    stored.id.uuidString.lowercased(), stored.number,
+                    stored.customerID.uuidString.lowercased(), stored.status.rawValue,
+                    stored.issueDate.description, finalPath, pdfHash,
+                    try Self.encode(stored), stored.issuedAt.timeIntervalSince1970
+                ])
+
+            for visitIDString in linkedVisitStrings {
+                guard let visitID = UUID(uuidString: visitIDString),
+                      var visit = try Self.fetchVisit(db: db, id: visitID),
+                      visit.state == .billed(invoiceID: originalID) else {
+                    throw InvoiceError.invalidTransition
+                }
+                visit.state = .billed(invoiceID: stored.id)
+                visit.updatedAt = Date()
+                try db.execute(
+                    sql: """
+                        UPDATE visit SET billed_invoice_id = ?, payload = ?, updated_at = ?
+                        WHERE id = ? AND state = 'billed' AND billed_invoice_id = ?
+                        """,
+                    arguments: [
+                        stored.id.uuidString.lowercased(), try Self.encode(visit),
+                        visit.updatedAt.timeIntervalSince1970, visitIDString,
+                        originalID.uuidString.lowercased()
+                    ]
+                )
+                guard db.changesCount == 1 else { throw InvoiceError.invalidTransition }
+                try db.execute(
+                    sql: "INSERT INTO invoice_visit_link(invoice_id, visit_id) VALUES (?, ?)",
+                    arguments: [stored.id.uuidString.lowercased(), visitIDString]
+                )
+            }
+
+            try db.execute(sql: """
+                INSERT INTO invoice_sequence(year, next_value) VALUES (?, 2)
+                ON CONFLICT(year) DO UPDATE SET next_value = next_value + 1
+                """, arguments: [stored.issueDate.year])
+            try db.execute(sql: """
+                INSERT INTO file_operation_journal(id, invoice_id, staged_path, final_path, sha256, state, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """, arguments: [
+                    operationID.uuidString.lowercased(), stored.id.uuidString.lowercased(),
+                    stagedPath, finalPath, pdfHash, Date().timeIntervalSince1970
+                ])
         }
         return operationID
     }
@@ -722,6 +899,12 @@ public actor AppDatabase {
                 sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
             )
         }
+        let liveCommittedDeletionID: String? = try writer.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT value FROM app_setting WHERE key = 'committed_deletion_id'"
+            )
+        }
         let source = try DatabaseQueue(path: sourcePath)
         try source.backup(to: writer)
         try Self.migrator.migrate(writer)
@@ -736,6 +919,15 @@ public actor AppDatabase {
                 try db.execute(
                     sql: "UPDATE entitlement_usage SET first_clean_invoice_id = ? WHERE singleton = 1",
                     arguments: [liveConsumedIssueID]
+                )
+            }
+            try db.execute(
+                sql: "DELETE FROM app_setting WHERE key = 'committed_deletion_id'"
+            )
+            if let liveCommittedDeletionID {
+                try db.execute(
+                    sql: "INSERT INTO app_setting(key, value) VALUES ('committed_deletion_id', ?)",
+                    arguments: [liveCommittedDeletionID]
                 )
             }
         }
@@ -756,9 +948,14 @@ public actor AppDatabase {
             try db.execute(sql: "ATTACH DATABASE ? AS incoming", arguments: [sourcePath])
             defer { try? db.execute(sql: "DETACH DATABASE incoming") }
 
-            let keyedTables = [
+            let incomingHasTemplates = (try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM incoming.sqlite_master WHERE type = 'table' AND name = 'service_template'"
+            ) ?? 0) == 1
+            var keyedTables = [
                 "business_profile", "customer", "site", "visit", "invoice_draft", "issued_invoice"
             ]
+            if incomingHasTemplates { keyedTables.insert("service_template", at: 1) }
             var conflicts: [String] = []
             for table in keyedTables {
                 let ids = try String.fetchAll(db, sql: """
@@ -784,13 +981,19 @@ public actor AppDatabase {
                 sites: try Self.newRowCount(db: db, table: "site"),
                 visits: try Self.newRowCount(db: db, table: "visit"),
                 drafts: try Self.newRowCount(db: db, table: "invoice_draft"),
-                invoices: try Self.newRowCount(db: db, table: "issued_invoice")
+                invoices: try Self.newRowCount(db: db, table: "issued_invoice"),
+                templates: incomingHasTemplates
+                    ? try Self.newRowCount(db: db, table: "service_template")
+                    : 0
             )
             let report = DatabaseMergeReport(counts: counts, conflicts: conflicts)
             guard conflicts.isEmpty else { return report }
             guard !dryRun else { return report }
 
             try db.execute(sql: "INSERT OR IGNORE INTO business_profile SELECT * FROM incoming.business_profile")
+            if incomingHasTemplates {
+                try db.execute(sql: "INSERT OR IGNORE INTO service_template SELECT * FROM incoming.service_template")
+            }
             try db.execute(sql: "INSERT OR IGNORE INTO customer SELECT * FROM incoming.customer")
             try db.execute(sql: "INSERT OR IGNORE INTO site SELECT * FROM incoming.site")
             try db.execute(sql: "INSERT OR IGNORE INTO visit SELECT * FROM incoming.visit")
@@ -824,11 +1027,21 @@ public actor AppDatabase {
     }
 
     private static func validateDomainInvariants(in db: Database) throws {
+        let hasServiceTemplates = (try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'service_template'"
+        ) ?? 0) == 1
+        if hasServiceTemplates {
+            _ = try Row.fetchAll(
+                db,
+                sql: "SELECT id, title, is_active, payload FROM service_template ORDER BY id"
+            ).map(validatedServiceTemplate)
+        }
         _ = try Row.fetchAll(
             db,
             sql: "SELECT id, customer_id, payload, updated_at FROM invoice_draft ORDER BY id"
         ).map(validatedDraft)
-        _ = try Row.fetchAll(
+        let invoices = try Row.fetchAll(
             db,
             sql: """
                 SELECT id, number, customer_id, status, issue_date,
@@ -836,6 +1049,34 @@ public actor AppDatabase {
                 FROM issued_invoice ORDER BY id
                 """
         ).map(validatedIssuedInvoice)
+        let invoicesByID = Dictionary(uniqueKeysWithValues: invoices.map { ($0.id, $0) })
+        for invoice in invoices {
+            if invoice.status == .corrected {
+                guard let replacementID = invoice.replacedByInvoiceID,
+                      replacementID != invoice.id,
+                      invoicesByID[replacementID]?.replacesInvoiceID == invoice.id else {
+                    throw InvoiceError.corruptData("invalid_correction_forward_link")
+                }
+            } else if invoice.replacedByInvoiceID != nil {
+                throw InvoiceError.corruptData("replacement_link_on_uncorrected_invoice")
+            }
+            if let originalID = invoice.replacesInvoiceID {
+                guard originalID != invoice.id,
+                      invoicesByID[originalID]?.status == .corrected,
+                      invoicesByID[originalID]?.replacedByInvoiceID == invoice.id else {
+                    throw InvoiceError.corruptData("invalid_correction_back_link")
+                }
+            }
+
+            var seen = Set<UUID>()
+            var cursor: IssuedInvoice? = invoice
+            while let current = cursor, let nextID = current.replacedByInvoiceID {
+                guard seen.insert(current.id).inserted else {
+                    throw InvoiceError.corruptData("correction_cycle")
+                }
+                cursor = invoicesByID[nextID]
+            }
+        }
 
         let activeStatuses = "'issued', 'paid', 'needsRecovery'"
         let duplicateActiveLinks = try Int.fetchOne(db, sql: """
@@ -957,6 +1198,21 @@ public actor AppDatabase {
         return draft
     }
 
+    private static func validatedServiceTemplate(_ row: Row) throws -> ServiceTemplate {
+        let rowID: String = row["id"]
+        let rowTitle: String = row["title"]
+        let rowIsActive: Bool = row["is_active"]
+        let payload: Data = row["payload"]
+        let template = try decode(ServiceTemplate.self, from: payload)
+        guard rowID == template.id.uuidString.lowercased(),
+              rowTitle == template.title.trimmingCharacters(in: .whitespacesAndNewlines),
+              rowIsActive == template.isActive else {
+            throw InvoiceError.corruptData("service_template_payload_column_mismatch")
+        }
+        try template.validate()
+        return template
+    }
+
     private static func validatedIssuedInvoice(_ row: Row) throws -> IssuedInvoice {
         let rowID: String = row["id"]
         let rowNumber: String = row["number"]
@@ -1020,13 +1276,22 @@ public struct DatabaseMergeReport: Hashable, Sendable {
         public let visits: Int
         public let drafts: Int
         public let invoices: Int
+        public let templates: Int
 
-        public init(customers: Int, sites: Int, visits: Int, drafts: Int, invoices: Int) {
+        public init(
+            customers: Int,
+            sites: Int,
+            visits: Int,
+            drafts: Int,
+            invoices: Int,
+            templates: Int = 0
+        ) {
             self.customers = customers
             self.sites = sites
             self.visits = visits
             self.drafts = drafts
             self.invoices = invoices
+            self.templates = templates
         }
     }
 

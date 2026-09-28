@@ -43,6 +43,37 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    func testServiceTemplatesRequireProAndRoundTripThroughBackup() async throws {
+        let sourceRoot = try temporaryDirectory()
+        let targetRoot = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceRoot)
+            try? FileManager.default.removeItem(at: targetRoot)
+        }
+        let source = try AppDatabase(path: sourceRoot.appendingPathComponent("data.sqlite").path)
+        let template = ServiceTemplate(
+            title: "定期点検",
+            unit: "回",
+            unitPrice: try Money(yen: 18_000),
+            taxRate: .standard10
+        )
+        await XCTAssertThrowsErrorAsync {
+            try await source.saveServiceTemplate(template, hasPro: false)
+        }
+        try await source.saveServiceTemplate(template, hasPro: true)
+
+        let package = sourceRoot.appendingPathComponent("Templates.invoicebackup", isDirectory: true)
+        try await BackupService(database: source, filesRoot: sourceRoot)
+            .export(to: package, appBuild: "tests")
+        let target = try AppDatabase(path: targetRoot.appendingPathComponent("data.sqlite").path)
+        _ = try await BackupService(database: target, filesRoot: targetRoot)
+            .restore(packageURL: package, mode: .replace)
+
+        let restored = try await target.serviceTemplates()
+        XCTAssertEqual(restored, [template])
+        try await target.integrityCheck()
+    }
+
     func testVoidReturnsOnlyItsCurrentlyBilledVisits() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -533,6 +564,101 @@ final class InvoicePersistenceTests: XCTestCase {
         }
     }
 
+    func testCorrectionPreservesOriginalAndCreatesReciprocalReplacement() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let originalBytes = Data("original-reviewed-pdf".utf8)
+        let service = IssueService(database: database, filesRoot: root) { _ in originalBytes }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+
+        var correctionLines = original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        correctionLines[0].description = "訂正後の作業内容"
+        correctionLines[0].unitPrice = try Money(yen: 25_000)
+        let number = try await database.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: correctionLines
+        )
+        let replacementBytes = Data("replacement-reviewed-pdf".utf8)
+        let issuedReplacement = try await service.issueCorrectionPrepared(
+            originalID: original.id,
+            replacement: replacement,
+            pdfData: replacementBytes,
+            hasPro: true
+        )
+
+        let originalRecord = try await database.invoice(id: original.id)
+        let replacementRecord = try await database.invoice(id: issuedReplacement.id)
+        let storedVisits = try await database.visits()
+        let storedOriginal = try XCTUnwrap(originalRecord)
+        let storedReplacement = try XCTUnwrap(replacementRecord)
+        let storedVisit = try XCTUnwrap(storedVisits.first)
+        XCTAssertEqual(storedOriginal.status, .corrected)
+        XCTAssertEqual(storedOriginal.replacedByInvoiceID, storedReplacement.id)
+        XCTAssertEqual(storedReplacement.replacesInvoiceID, storedOriginal.id)
+        XCTAssertEqual(storedReplacement.lines[0].description, "訂正後の作業内容")
+        XCTAssertEqual(storedVisit.state, .billed(invoiceID: storedReplacement.id))
+        let readOriginalBytes = try await service.canonicalPDFData(for: storedOriginal)
+        let readReplacementBytes = try await service.canonicalPDFData(for: storedReplacement)
+        XCTAssertEqual(readOriginalBytes, originalBytes)
+        XCTAssertEqual(readReplacementBytes, replacementBytes)
+        try await database.integrityCheck()
+    }
+
+    func testCorrectionRequiresProAfterFreeIssue() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: false
+        )
+        let number = try await database.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await service.issueCorrectionPrepared(
+                originalID: original.id,
+                replacement: replacement,
+                pdfData: Data("replacement".utf8),
+                hasPro: false
+            )
+        }
+        let storedOriginal = try await database.invoice(id: original.id)
+        XCTAssertEqual(storedOriginal?.status, .issued)
+        XCTAssertNil(storedOriginal?.replacedByInvoiceID)
+    }
+
     func testBackupValidationRejectsIssuedPayloadColumnMismatch() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -698,6 +824,58 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(committedID, deletionID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Invoices").path))
+    }
+
+    func testReplaceRestoreReconcilesCommittedDeletionBeforeReplacingDatabase() async throws {
+        let sourceRoot = try temporaryDirectory()
+        let targetRoot = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceRoot)
+            try? FileManager.default.removeItem(at: targetRoot)
+        }
+
+        let sourceDatabase = try AppDatabase(path: sourceRoot.appendingPathComponent("data.sqlite").path)
+        _ = try await seed(database: sourceDatabase)
+        let package = sourceRoot.appendingPathComponent("Restore.invoicebackup", isDirectory: true)
+        try await BackupService(database: sourceDatabase, filesRoot: sourceRoot)
+            .export(to: package, appBuild: "tests")
+
+        let targetDatabase = try AppDatabase(path: targetRoot.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: targetDatabase)
+        let issueService = IssueService(database: targetDatabase, filesRoot: targetRoot) { _ in
+            Data("deleted-canonical".utf8)
+        }
+        _ = try await issueService.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+        let deletionID = UUID()
+        let quarantine = targetRoot.appendingPathComponent(
+            ".Deletion-\(deletionID.uuidString.lowercased())",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: targetRoot.appendingPathComponent("Invoices", isDirectory: true),
+            to: quarantine.appendingPathComponent("Invoices", isDirectory: true)
+        )
+        try await targetDatabase.deleteAllDomainData(committedDeletionID: deletionID)
+
+        let targetBackup = BackupService(database: targetDatabase, filesRoot: targetRoot)
+        _ = try await targetBackup.restore(packageURL: package, mode: .replace)
+        try await DeletionCoordinator(database: targetDatabase, filesRoot: targetRoot)
+            .reconcileInterruptedDeletion()
+
+        let committedID = try await targetDatabase.committedDeletionID()
+        let restoredCustomers = try await targetDatabase.customers()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
+        XCTAssertEqual(committedID, deletionID)
+        XCTAssertEqual(restoredCustomers.count, 1)
+        try await targetDatabase.integrityCheck()
     }
 
     private func temporaryDirectory() throws -> URL {

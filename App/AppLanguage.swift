@@ -26,6 +26,9 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         if id == "invalid_date" { return text("error.invalidDate") }
         if id == "invalid_tax_rate" { return text("error.invalidTax") }
         if id == "entitlement_required" { return text("error.proRequired") }
+        if id == "storekit_purchase_pending" { return text("store.pending") }
+        if id == "storekit_restore_not_found" { return text("store.restoreNotFound") }
+        if id.hasPrefix("storekit_") { return text("store.unavailable") }
         if id.hasPrefix("missing_required_field:") { return text("error.missingField") }
         if id.hasPrefix("corrupt_data:") { return text("error.dataIntegrity") }
         if id == "visit_not_unbilled" || id == "invalid_transition" {

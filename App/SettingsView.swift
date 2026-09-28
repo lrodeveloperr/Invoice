@@ -2,7 +2,9 @@ import InvoiceDomain
 import InvoiceEntitlements
 import InvoiceBackup
 import InvoicePersistence
+import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -35,6 +37,9 @@ struct SettingsView: View {
     @State private var registration = ""
     @State private var bank = ""
     @State private var prefix = ""
+    @State private var pdfStyle: PDFStyle = .classic
+    @State private var logoPNGData: Data?
+    @State private var logoItem: PhotosPickerItem?
     @State private var showPro = false
     @State private var showAddCustomer = false
     @State private var showAddSite = false
@@ -45,6 +50,8 @@ struct SettingsView: View {
     @State private var showDelete = false
     @State private var restorePreview: RestorePreview?
     @State private var showResetSample = false
+    @State private var editingCustomer: Customer?
+    @State private var showAddTemplate = false
 
     var body: some View {
         NavigationStack {
@@ -66,18 +73,50 @@ struct SettingsView: View {
                     TextField(language.text("field.bank"), text: $bank, axis: .vertical)
                     TextField(language.text("field.prefix"), text: $prefix)
                         .textInputAutocapitalization(.characters)
+                    if store.hasPro {
+                        Picker(language.text("pdf.style"), selection: $pdfStyle) {
+                            ForEach(PDFStyle.allCases, id: \.self) { style in
+                                Text(language.text("pdf.style.\(style.rawValue)")).tag(style)
+                            }
+                        }
+                        PhotosPicker(selection: $logoItem, matching: .images) {
+                            Label(
+                                logoPNGData == nil
+                                    ? language.text("logo.choose")
+                                    : language.text("logo.replace"),
+                                systemImage: "photo.badge.plus"
+                            )
+                        }
+                        if logoPNGData != nil {
+                            Button(language.text("logo.remove"), role: .destructive) {
+                                logoPNGData = nil
+                                logoItem = nil
+                            }
+                        }
+                    } else {
+                        Button {
+                            showPro = true
+                        } label: {
+                            Label(language.text("branding.pro"), systemImage: "paintbrush")
+                        }
+                    }
                     Button(language.text("action.saveIssuer")) { saveBusiness() }
                         .disabled(issuerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 Section(language.text("settings.customers")) {
                     ForEach(model.customers) { customer in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(customer.name)
-                            if !customer.billingAddress.isEmpty {
-                                Text(customer.billingAddress).font(.caption).foregroundStyle(.secondary)
+                        Button {
+                            editingCustomer = customer
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(customer.name).foregroundStyle(.primary)
+                                if !customer.billingAddress.isEmpty {
+                                    Text(customer.billingAddress).font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .buttonStyle(.plain)
                     }
                     Button {
                         showAddCustomer = true
@@ -90,6 +129,22 @@ struct SettingsView: View {
                         Label(language.text("site.add"), systemImage: "mappin.and.ellipse")
                     }
                     .disabled(model.customers.isEmpty)
+                }
+
+                Section(language.text("settings.templates")) {
+                    ForEach(model.serviceTemplates.filter(\.isActive)) { template in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(template.title)
+                            Text("\(template.unit) · \(yenText(template.unitPrice)) · \(template.taxRate.label)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Button {
+                        if store.hasPro { showAddTemplate = true } else { showPro = true }
+                    } label: {
+                        Label(language.text("template.add"), systemImage: "list.bullet.rectangle")
+                    }
                 }
 
                 Section(language.text("settings.pro")) {
@@ -142,6 +197,19 @@ struct SettingsView: View {
         }
         .onAppear(perform: loadBusiness)
         .onChange(of: model.business?.id) { _, _ in loadBusiness() }
+        .onChange(of: logoItem) { _, item in
+            Task {
+                guard store.hasPro, let item else { return }
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self),
+                          let image = UIImage(data: data),
+                          let png = normalizedLogoPNG(image) else { return }
+                    logoPNGData = png
+                } catch {
+                    model.errorMessage = language.errorText(error)
+                }
+            }
+        }
         .sheet(isPresented: $showPro) {
             ProSheet(language: language).environmentObject(store)
         }
@@ -150,6 +218,16 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showAddSite) {
             AddSiteView(language: language).environmentObject(model)
+        }
+        .sheet(item: $editingCustomer) { customer in
+            EditCustomerView(customer: customer, language: language)
+                .environmentObject(model)
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $showAddTemplate) {
+            AddTemplateView(language: language)
+                .environmentObject(model)
+                .environmentObject(store)
         }
         .sheet(isPresented: $showDelete) {
             DeleteDataView(language: language, phrase: $deletePhrase) {
@@ -200,6 +278,8 @@ struct SettingsView: View {
         registration = business.registrationNumber ?? ""
         bank = business.bankDetails
         prefix = business.invoicePrefix
+        pdfStyle = business.effectivePDFStyle
+        logoPNGData = business.logoPNGData
     }
 
     private func saveBusiness() {
@@ -211,9 +291,21 @@ struct SettingsView: View {
             bankDetails: bank,
             invoicePrefix: prefix,
             lineRounding: model.business?.lineRounding ?? .halfUp,
-            taxRounding: model.business?.taxRounding ?? .floor
+            taxRounding: model.business?.taxRounding ?? .floor,
+            pdfStyle: store.hasPro ? pdfStyle : model.business?.pdfStyle,
+            logoPNGData: store.hasPro ? logoPNGData : model.business?.logoPNGData
         )
-        Task { await model.saveBusiness(profile) }
+        Task { await model.saveBusiness(profile, hasPro: store.hasPro) }
+    }
+
+    private func normalizedLogoPNG(_ image: UIImage) -> Data? {
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, 512 / longest)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }.pngData()
     }
 
     private func exportBackup() {
@@ -337,6 +429,145 @@ private struct AddCustomerView: View {
                 showPro = true
             } catch {
                 model.errorMessage = String(describing: error)
+            }
+        }
+    }
+}
+
+private struct EditCustomerView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: StoreKitEntitlementStore
+    @Environment(\.dismiss) private var dismiss
+    let customer: Customer
+    let language: AppLanguage
+    @State private var name: String
+    @State private var address: String
+    @State private var closingDay: Int
+    @State private var paymentTermDays: Int
+    @State private var showPro = false
+
+    init(customer: Customer, language: AppLanguage) {
+        self.customer = customer
+        self.language = language
+        _name = State(initialValue: customer.name)
+        _address = State(initialValue: customer.billingAddress)
+        _closingDay = State(initialValue: customer.closingDay ?? 0)
+        _paymentTermDays = State(initialValue: customer.paymentTermDays)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(language.text("field.customerName"), text: $name)
+                TextField(language.text("field.billingAddress"), text: $address, axis: .vertical)
+                if store.hasPro {
+                    Picker(language.text("field.closingDay"), selection: $closingDay) {
+                        Text(language.text("field.none")).tag(0)
+                        ForEach(1...31, id: \.self) { day in
+                            Text(String(format: language.text("field.dayFormat"), day)).tag(day)
+                        }
+                    }
+                    Picker(language.text("field.paymentTerm"), selection: $paymentTermDays) {
+                        ForEach([0, 7, 15, 30, 45, 60], id: \.self) { days in
+                            Text(String(format: language.text("field.daysFormat"), days)).tag(days)
+                        }
+                    }
+                } else {
+                    Button { showPro = true } label: {
+                        Label(language.text("customer.termsPro"), systemImage: "checkmark.seal")
+                    }
+                }
+            }
+            .navigationTitle(language.text("customer.edit"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(language.text("action.cancel")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(language.text("action.save")) { save() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .sheet(isPresented: $showPro) {
+            ProSheet(language: language).environmentObject(store)
+        }
+    }
+
+    private func save() {
+        var edited = customer
+        edited.name = name
+        edited.billingAddress = address
+        if store.hasPro {
+            edited.closingDay = closingDay == 0 ? nil : closingDay
+            edited.paymentTermDays = paymentTermDays
+        }
+        Task {
+            do {
+                try await model.saveCustomer(edited, hasPro: store.hasPro)
+                dismiss()
+            } catch {
+                model.errorMessage = language.errorText(error)
+            }
+        }
+    }
+}
+
+private struct AddTemplateView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: StoreKitEntitlementStore
+    @Environment(\.dismiss) private var dismiss
+    let language: AppLanguage
+    @State private var title = ""
+    @State private var unit = "回"
+    @State private var unitPrice = ""
+    @State private var taxBasisPoints = TaxRate.standard10.basisPoints
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(language.text("field.service"), text: $title)
+                TextField(language.text("field.unit"), text: $unit)
+                TextField(language.text("field.unitPrice"), text: $unitPrice)
+                    .keyboardType(.numberPad)
+                Picker(language.text("field.tax"), selection: $taxBasisPoints) {
+                    ForEach(TaxRate.launchCatalog, id: \.basisPoints) { rate in
+                        Text(rate.label).tag(rate.basisPoints)
+                    }
+                }
+            }
+            .navigationTitle(language.text("template.add"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(language.text("action.cancel")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(language.text("action.add")) { save() }
+                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        Task {
+            do {
+                guard let yen = Int64(unitPrice),
+                      let tax = TaxRate.launchCatalog.first(where: { $0.basisPoints == taxBasisPoints }) else {
+                    throw InvoiceError.invalidMoney
+                }
+                try await model.saveServiceTemplate(
+                    ServiceTemplate(
+                        title: title,
+                        unit: unit,
+                        unitPrice: try Money(yen: yen),
+                        taxRate: tax
+                    ),
+                    hasPro: store.hasPro
+                )
+                dismiss()
+            } catch {
+                model.errorMessage = language.errorText(error)
             }
         }
     }

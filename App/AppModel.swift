@@ -15,6 +15,13 @@ struct PreviewPackage: Identifiable {
     let pdfData: Data
 }
 
+struct CorrectionPreviewPackage: Identifiable {
+    let id = UUID()
+    let original: IssuedInvoice
+    let invoice: IssuedInvoice
+    let pdfData: Data
+}
+
 struct RestorePreview: Identifiable, Sendable {
     let id = UUID()
     let url: URL
@@ -30,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var visits: [Visit] = []
     @Published private(set) var invoices: [IssuedInvoice] = []
     @Published private(set) var drafts: [InvoiceDraft] = []
+    @Published private(set) var serviceTemplates: [ServiceTemplate] = []
     @Published var isBusy = false
     @Published var errorMessage: String?
 
@@ -84,6 +92,7 @@ final class AppModel: ObservableObject {
         async let loadedVisits = database.visits()
         async let loadedInvoices = database.invoices()
         async let loadedDrafts = database.drafts()
+        async let loadedTemplates = database.serviceTemplates()
         let customerRows = try await loadedCustomers
         var siteRows: [Site] = []
         for customer in customerRows {
@@ -95,15 +104,21 @@ final class AppModel: ObservableObject {
         visits = try await loadedVisits
         invoices = try await loadedInvoices
         drafts = try await loadedDrafts
+        serviceTemplates = try await loadedTemplates
     }
 
     func sites(for customerID: UUID) -> [Site] {
         sites.filter { $0.customerID == customerID && $0.isActive }
     }
 
-    func saveBusiness(_ profile: BusinessProfile) async {
+    func saveBusiness(_ profile: BusinessProfile, hasPro: Bool) async {
         await perform {
             guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
+            if !hasPro,
+               let current = self.business,
+               (profile.pdfStyle != current.pdfStyle || profile.logoPNGData != current.logoPNGData) {
+                throw InvoiceError.entitlementRequired
+            }
             try await database.saveBusiness(profile)
             try await self.refresh()
         }
@@ -134,6 +149,18 @@ final class AppModel: ObservableObject {
         try await database.saveSite(site)
         try await refresh()
         return site
+    }
+
+    func saveCustomer(_ customer: Customer, hasPro: Bool) async throws {
+        guard let database else { throw InvoiceError.corruptData("database_unavailable") }
+        try await database.saveCustomer(customer, hasPro: hasPro)
+        try await refresh()
+    }
+
+    func saveServiceTemplate(_ template: ServiceTemplate, hasPro: Bool) async throws {
+        guard let database else { throw InvoiceError.corruptData("database_unavailable") }
+        try await database.saveServiceTemplate(template, hasPro: hasPro)
+        try await refresh()
     }
 
     func recordVisit(
@@ -229,6 +256,48 @@ final class AppModel: ObservableObject {
             customer: package.customer,
             sites: package.sites,
             visits: package.visits,
+            hasPro: hasPro
+        )
+        try await refresh()
+        return invoice
+    }
+
+    func prepareCorrection(
+        original: IssuedInvoice,
+        issueDate: Date,
+        dueDate: Date,
+        lines: [InvoiceCorrectionLine]
+    ) async throws -> CorrectionPreviewPackage {
+        guard let database else { throw InvoiceError.corruptData("database_unavailable") }
+        let localIssueDate = try localDate(issueDate)
+        let number = try await database.proposedNumber(
+            issueDate: localIssueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let invoice = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: localIssueDate,
+            dueDate: try localDate(dueDate),
+            lines: lines
+        )
+        let pdf = try CanonicalPDFRenderer.render(invoice: invoice, language: "ja")
+        return CorrectionPreviewPackage(
+            original: original,
+            invoice: invoice,
+            pdfData: pdf
+        )
+    }
+
+    func issueCorrection(
+        _ package: CorrectionPreviewPackage,
+        hasPro: Bool
+    ) async throws -> IssuedInvoice {
+        guard let issueService else { throw InvoiceError.corruptData("database_unavailable") }
+        let invoice = try await issueService.issueCorrectionPrepared(
+            originalID: package.original.id,
+            replacement: package.invoice,
+            pdfData: package.pdfData,
             hasPro: hasPro
         )
         try await refresh()
@@ -349,6 +418,16 @@ final class AppModel: ObservableObject {
         try await database.saveBusiness(profile)
         try await database.saveCustomer(customer)
         try await database.saveSite(site)
+
+        try await database.saveServiceTemplate(
+            ServiceTemplate(
+                title: "定期清掃",
+                unit: "回",
+                unitPrice: try Money(yen: 12_000),
+                taxRate: .standard10
+            ),
+            hasPro: true
+        )
 
         let now = Date()
         let calendar = Calendar(identifier: .gregorian)
