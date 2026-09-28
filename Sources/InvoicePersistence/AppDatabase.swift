@@ -268,12 +268,19 @@ public actor AppDatabase {
         let payload = try Self.encode(customer)
         try writer.write { db in
             if customer.isActive, !hasPro {
-                let activeOthers = try Int.fetchOne(
+                let existingIsActive = try Bool.fetchOne(
                     db,
-                    sql: "SELECT COUNT(*) FROM customer WHERE is_active = 1 AND id <> ?",
+                    sql: "SELECT is_active FROM customer WHERE id = ?",
                     arguments: [customer.id.uuidString.lowercased()]
-                ) ?? 0
-                guard activeOthers < 2 else { throw InvoiceError.entitlementRequired }
+                )
+                if existingIsActive != true {
+                    let activeOthers = try Int.fetchOne(
+                        db,
+                        sql: "SELECT COUNT(*) FROM customer WHERE is_active = 1 AND id <> ?",
+                        arguments: [customer.id.uuidString.lowercased()]
+                    ) ?? 0
+                    guard activeOthers < 2 else { throw InvoiceError.entitlementRequired }
+                }
             }
             try db.execute(sql: """
                 INSERT INTO customer(id, name, is_active, payload, updated_at) VALUES (?, ?, ?, ?, ?)

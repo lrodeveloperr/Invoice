@@ -100,6 +100,30 @@ final class InvoiceDomainTests: XCTestCase {
         XCTAssertTrue(EntitlementState(hasPro: true, firstCleanInvoiceID: UUID()).permits(activeCustomerCount: 999))
     }
 
+    func testCorrectionRejectsWorkContextThatDoesNotMatchSourceVisit() throws {
+        let fixture = try Fixture.make()
+        var original = try InvoiceCalculator.snapshot(
+            number: "2026-0001",
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit]
+        )
+        original.pdfRelativePath = "Invoices/\(original.id.uuidString.lowercased()).pdf"
+        original.pdfSHA256 = String(repeating: "a", count: 64)
+        var lines = original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        lines[0].workDate = try LocalDate(year: 2026, month: 9, day: 11)
+
+        XCTAssertThrowsError(try InvoiceCalculator.correctionSnapshot(
+            number: "2026-0002",
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: lines
+        ))
+    }
+
     func testTenThousandGeneratedTaxInvariants() throws {
         var state: UInt64 = 0xD471_5EED
         for _ in 0..<10_000 {

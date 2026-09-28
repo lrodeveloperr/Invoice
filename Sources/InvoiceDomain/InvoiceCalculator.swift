@@ -151,6 +151,16 @@ public enum InvoiceCalculator {
         guard Set(lines.map(\.sourceVisitID)) == originalVisitIDs else {
             throw InvoiceError.invalidTransition
         }
+        let originalVisitContexts = Dictionary(grouping: original.lines, by: \.sourceVisitID)
+            .compactMapValues(\.first)
+        guard lines.allSatisfy({ line in
+            guard let originalLine = originalVisitContexts[line.sourceVisitID] else { return false }
+            return line.workDate == originalLine.workDate
+                && line.siteName == originalLine.siteName
+                && line.siteAddress == originalLine.siteAddress
+        }) else {
+            throw InvoiceError.invalidTransition
+        }
 
         let snapshotLines = try lines.enumerated().map { position, line in
             let description = line.description.trimmingCharacters(in: .whitespacesAndNewlines)

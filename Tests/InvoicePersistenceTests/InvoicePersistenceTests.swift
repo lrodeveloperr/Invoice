@@ -60,6 +60,31 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(activeCustomers.count, 2)
     }
 
+    func testFreeCustomerLimitAllowsEditingExistingActiveProCustomer() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let first = Customer(name: "一")
+        let second = Customer(name: "二")
+        var third = Customer(name: "三")
+        try await database.saveCustomer(first, hasPro: true)
+        try await database.saveCustomer(second, hasPro: true)
+        try await database.saveCustomer(third, hasPro: true)
+
+        third.name = "三・更新"
+        try await database.saveCustomer(third, hasPro: false)
+        let customers = try await database.customers()
+        let updated = customers.first { $0.id == third.id }
+        XCTAssertEqual(updated?.name, "三・更新")
+
+        third.isActive = false
+        try await database.saveCustomer(third, hasPro: false)
+        third.isActive = true
+        await XCTAssertThrowsErrorAsync {
+            try await database.saveCustomer(third, hasPro: false)
+        }
+    }
+
     func testServiceTemplatesRequireProAndRoundTripThroughBackup() async throws {
         let sourceRoot = try temporaryDirectory()
         let targetRoot = try temporaryDirectory()
@@ -742,13 +767,11 @@ final class InvoicePersistenceTests: XCTestCase {
         var correctionLines = original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
         correctionLines[0].description = "訂正後の作業内容"
         correctionLines[0].unitPrice = try Money(yen: 25_000)
-        correctionLines[0].workDate = try LocalDate(year: 2026, month: 9, day: 11)
-        correctionLines[0].siteName = "訂正後の現場"
         correctionLines.append(InvoiceCorrectionLine(
             sourceVisitID: correctionLines[0].sourceVisitID,
             workDate: correctionLines[0].workDate,
             siteName: correctionLines[0].siteName,
-            siteAddress: "訂正後の住所",
+            siteAddress: correctionLines[0].siteAddress,
             description: "追加明細",
             quantity: try Quantity(decimalString: "1"),
             unit: "式",
@@ -791,7 +814,7 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(storedReplacement.replacesInvoiceNumber, storedOriginal.number)
         XCTAssertEqual(storedReplacement.lines[0].description, "訂正後の作業内容")
         XCTAssertEqual(storedReplacement.lines.count, 2)
-        XCTAssertEqual(storedReplacement.lines[0].siteName, "訂正後の現場")
+        XCTAssertEqual(storedReplacement.lines[0].siteName, original.lines[0].siteName)
         XCTAssertEqual(storedReplacement.issuer.issuerName, "青空メンテナンス合同会社")
         XCTAssertEqual(storedReplacement.customerName, "山田商事株式会社")
         XCTAssertEqual(storedVisit.state, .billed(invoiceID: storedReplacement.id))

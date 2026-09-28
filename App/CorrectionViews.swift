@@ -5,9 +5,9 @@ import SwiftUI
 private struct CorrectionLineForm: Identifiable {
     let id: UUID
     let sourceVisitID: UUID
-    var workDate: Date
-    var siteName: String
-    var siteAddress: String
+    let workDate: Date
+    let siteName: String
+    let siteAddress: String
     var description: String
     var quantity: String
     var unit: String
@@ -145,6 +145,9 @@ struct CorrectionFlowView: View {
                 Text(language.text("correction.explanation"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Text(language.text("correction.visitLocked"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Section(language.text("correction.dates")) {
                 DatePicker(language.text("correction.issueDate"), selection: $issueDate, displayedComponents: .date)
@@ -163,9 +166,13 @@ struct CorrectionFlowView: View {
             }
             ForEach($lines) { $line in
                 Section(language.text("correction.line")) {
-                    DatePicker(language.text("field.date"), selection: $line.workDate, displayedComponents: .date)
-                    TextField(language.text("field.siteName"), text: $line.siteName)
-                    TextField(language.text("field.address"), text: $line.siteAddress, axis: .vertical)
+                    LabeledContent(language.text("field.date")) {
+                        Text(line.workDate, format: .dateTime.year().month().day())
+                    }
+                    LabeledContent(language.text("field.siteName"), value: line.siteName)
+                    if !line.siteAddress.isEmpty {
+                        LabeledContent(language.text("field.address"), value: line.siteAddress)
+                    }
                     TextField(language.text("field.service"), text: $line.description, axis: .vertical)
                     TextField(language.text("field.quantity"), text: $line.quantity)
                         .keyboardType(.decimalPad)
