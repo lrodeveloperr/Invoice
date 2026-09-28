@@ -303,37 +303,73 @@ public actor AppDatabase {
 
     public func drafts() throws -> [InvoiceDraft] {
         try writer.read { db in
-            try Data.fetchAll(db, sql: "SELECT payload FROM invoice_draft ORDER BY updated_at DESC, id")
-                .map { try Self.decode(InvoiceDraft.self, from: $0) }
+            try Row.fetchAll(
+                db,
+                sql: "SELECT id, customer_id, payload, updated_at FROM invoice_draft ORDER BY updated_at DESC, id"
+            ).map(Self.validatedDraft)
         }
     }
 
     public func draft(id: UUID) throws -> InvoiceDraft? {
         try writer.read { db in
-            guard let data: Data = try Data.fetchOne(
+            guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT payload FROM invoice_draft WHERE id = ?",
+                sql: "SELECT id, customer_id, payload, updated_at FROM invoice_draft WHERE id = ?",
                 arguments: [id.uuidString.lowercased()]
             ) else { return nil }
-            return try Self.decode(InvoiceDraft.self, from: data)
+            return try Self.validatedDraft(row)
         }
     }
 
     public func invoices() throws -> [IssuedInvoice] {
         try writer.read { db in
-            try Data.fetchAll(db, sql: "SELECT payload FROM issued_invoice ORDER BY issue_date DESC, number DESC")
-                .map { try Self.decode(IssuedInvoice.self, from: $0) }
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, number, customer_id, status, issue_date,
+                           pdf_relative_path, pdf_sha256, payload, issued_at
+                    FROM issued_invoice ORDER BY issue_date DESC, number DESC
+                    """
+            ).map(Self.validatedIssuedInvoice)
         }
     }
 
     public func invoice(id: UUID) throws -> IssuedInvoice? {
         try writer.read { db in
-            guard let data: Data = try Data.fetchOne(
+            guard let row = try Row.fetchOne(
                 db,
-                sql: "SELECT payload FROM issued_invoice WHERE id = ?",
+                sql: """
+                    SELECT id, number, customer_id, status, issue_date,
+                           pdf_relative_path, pdf_sha256, payload, issued_at
+                    FROM issued_invoice WHERE id = ?
+                    """,
                 arguments: [id.uuidString.lowercased()]
             ) else { return nil }
-            return try Self.decode(IssuedInvoice.self, from: data)
+            return try Self.validatedIssuedInvoice(row)
+        }
+    }
+
+    public func canonicalPDFReference(invoiceID: UUID) throws -> CanonicalPDFReference {
+        try writer.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, number, customer_id, status, issue_date,
+                           pdf_relative_path, pdf_sha256, payload, issued_at
+                    FROM issued_invoice WHERE id = ?
+                    """,
+                arguments: [invoiceID.uuidString.lowercased()]
+            ) else { throw InvoiceError.corruptData("missing_invoice") }
+            let invoice = try Self.validatedIssuedInvoice(row)
+            guard let relativePath = invoice.pdfRelativePath,
+                  let sha256 = invoice.pdfSHA256 else {
+                throw InvoiceError.corruptData("missing_canonical_pdf_reference")
+            }
+            return CanonicalPDFReference(
+                invoiceID: invoice.id.uuidString.lowercased(),
+                relativePath: relativePath,
+                sha256: sha256.lowercased()
+            )
         }
     }
 
@@ -611,18 +647,22 @@ public actor AppDatabase {
             }
 
             return try Row.fetchAll(db, sql: """
-                SELECT id, pdf_relative_path, pdf_sha256
+                SELECT id, number, customer_id, status, issue_date,
+                       pdf_relative_path, pdf_sha256, payload, issued_at
                 FROM issued_invoice
                 ORDER BY id
                 """).map { row in
-                let invoiceID: String = row["id"]
-                let relativePath: String = row["pdf_relative_path"]
-                let sha256: String = row["pdf_sha256"]
+                let invoice = try Self.validatedIssuedInvoice(row)
+                let invoiceID = invoice.id.uuidString.lowercased()
+                guard let relativePath = invoice.pdfRelativePath,
+                      let sha256 = invoice.pdfSHA256 else {
+                    throw InvoiceError.corruptData("issued_invoice_missing_pdf_reference")
+                }
                 let pathComponents = relativePath.split(separator: "/", omittingEmptySubsequences: false)
                 guard UUID(uuidString: invoiceID) != nil,
                       pathComponents.count == 2,
                       pathComponents.first == "Invoices",
-                      pathComponents.last?.isEmpty == false,
+                      pathComponents.last == Substring(invoiceID + ".pdf"),
                       !relativePath.contains(".."),
                       relativePath.lowercased().hasSuffix(".pdf"),
                       sha256.count == 64,
@@ -753,6 +793,19 @@ public actor AppDatabase {
     }
 
     private static func validateDomainInvariants(in db: Database) throws {
+        _ = try Row.fetchAll(
+            db,
+            sql: "SELECT id, customer_id, payload, updated_at FROM invoice_draft ORDER BY id"
+        ).map(validatedDraft)
+        _ = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT id, number, customer_id, status, issue_date,
+                       pdf_relative_path, pdf_sha256, payload, issued_at
+                FROM issued_invoice ORDER BY id
+                """
+        ).map(validatedIssuedInvoice)
+
         let activeStatuses = "'issued', 'paid', 'needsRecovery'"
         let duplicateActiveLinks = try Int.fetchOne(db, sql: """
             SELECT COUNT(*) FROM (
@@ -857,6 +910,54 @@ public actor AppDatabase {
     private static func fetchVisit(db: Database, id: UUID) throws -> Visit? {
         guard let data: Data = try Data.fetchOne(db, sql: "SELECT payload FROM visit WHERE id = ?", arguments: [id.uuidString.lowercased()]) else { return nil }
         return try Self.decode(Visit.self, from: data)
+    }
+
+    private static func validatedDraft(_ row: Row) throws -> InvoiceDraft {
+        let rowID: String = row["id"]
+        let rowCustomerID: String = row["customer_id"]
+        let rowUpdatedAt: Double = row["updated_at"]
+        let payload: Data = row["payload"]
+        let draft = try decode(InvoiceDraft.self, from: payload)
+        guard rowID == draft.id.uuidString.lowercased(),
+              rowCustomerID == draft.customerID.uuidString.lowercased(),
+              abs(rowUpdatedAt - draft.updatedAt.timeIntervalSince1970) < 0.0011 else {
+            throw InvoiceError.corruptData("invoice_draft_payload_column_mismatch")
+        }
+        return draft
+    }
+
+    private static func validatedIssuedInvoice(_ row: Row) throws -> IssuedInvoice {
+        let rowID: String = row["id"]
+        let rowNumber: String = row["number"]
+        let rowCustomerID: String = row["customer_id"]
+        let rowStatus: String = row["status"]
+        let rowIssueDate: String = row["issue_date"]
+        let rowPDFPath: String? = row["pdf_relative_path"]
+        let rowPDFHash: String? = row["pdf_sha256"]
+        let rowIssuedAt: Double = row["issued_at"]
+        let payload: Data = row["payload"]
+        let invoice = try decode(IssuedInvoice.self, from: payload)
+        guard rowID == invoice.id.uuidString.lowercased(),
+              rowNumber == invoice.number,
+              rowCustomerID == invoice.customerID.uuidString.lowercased(),
+              rowStatus == invoice.status.rawValue,
+              rowIssueDate == invoice.issueDate.description,
+              rowPDFPath == invoice.pdfRelativePath,
+              rowPDFHash?.lowercased() == invoice.pdfSHA256?.lowercased(),
+              abs(rowIssuedAt - invoice.issuedAt.timeIntervalSince1970) < 0.0011 else {
+            throw InvoiceError.corruptData("issued_invoice_payload_column_mismatch")
+        }
+        if let rowPDFPath, let rowPDFHash {
+            let expectedPath = "Invoices/\(rowID).pdf"
+            guard rowPDFPath == expectedPath,
+                  rowPDFHash.count == 64,
+                  rowPDFHash.allSatisfy({ $0.isHexDigit }) else {
+                throw InvoiceError.corruptData("invalid_issued_pdf_reference")
+            }
+        } else if rowPDFPath != nil || rowPDFHash != nil {
+            throw InvoiceError.corruptData("incomplete_issued_pdf_reference")
+        }
+        return invoice
     }
 
     private static func newRowCount(db: Database, table: String) throws -> Int {

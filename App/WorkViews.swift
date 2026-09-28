@@ -1,4 +1,5 @@
 import InvoiceDomain
+import InvoiceEntitlements
 import SwiftUI
 
 private enum WorkDestination: Hashable {
@@ -171,6 +172,7 @@ private struct VisitDetailView: View {
 
 private struct VisitEditorView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var store: StoreKitEntitlementStore
     let language: AppLanguage
     let onSaved: () -> Void
     @State private var customerID: UUID?
@@ -183,6 +185,16 @@ private struct VisitEditorView: View {
     @State private var taxBasisPoints = 1_000
     @State private var note = ""
     @State private var saving = false
+    @State private var showPro = false
+
+    private var previousVisit: Visit? {
+        model.visits
+            .filter { visit in
+                if case .draft = visit.state { return false }
+                return true
+            }
+            .max { $0.workDate < $1.workDate }
+    }
 
     private var availableSites: [Site] {
         guard let customerID else { return [] }
@@ -191,6 +203,17 @@ private struct VisitEditorView: View {
 
     var body: some View {
         Form {
+            if previousVisit != nil {
+                Section {
+                    Button {
+                        if store.hasPro { copyPrevious() } else { showPro = true }
+                    } label: {
+                        Label(language.text("visit.copyPrevious"), systemImage: "doc.on.doc")
+                    }
+                } footer: {
+                    Text(store.hasPro ? language.text("visit.copyPrevious.note") : language.text("visit.copyPrevious.pro"))
+                }
+            }
             Section(language.text("visit.whereWhen")) {
                 Picker(language.text("field.customer"), selection: $customerID) {
                     Text(language.text("field.choose")).tag(UUID?.none)
@@ -243,6 +266,21 @@ private struct VisitEditorView: View {
         .onChange(of: customerID) { _, newValue in
             siteID = newValue.flatMap { model.sites(for: $0).first?.id }
         }
+        .sheet(isPresented: $showPro) {
+            ProSheet(language: language).environmentObject(store)
+        }
+    }
+
+    private func copyPrevious() {
+        guard let visit = previousVisit, let line = visit.lines.first else { return }
+        customerID = visit.customerID
+        siteID = visit.siteID
+        description = line.description
+        quantity = line.quantity.description
+        unit = line.unit
+        unitPrice = String(line.unitPrice.yen)
+        taxBasisPoints = line.taxRate.basisPoints
+        note = visit.note
     }
 
     private func save() {

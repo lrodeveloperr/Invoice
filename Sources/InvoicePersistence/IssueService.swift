@@ -100,15 +100,22 @@ public actor IssueService {
         }
     }
 
-    public func canonicalPDFData(for invoice: IssuedInvoice) throws -> Data {
-        guard let relativePath = invoice.pdfRelativePath,
-              let expectedHash = invoice.pdfSHA256 else {
-            throw InvoiceError.corruptData("missing_canonical_pdf_reference")
+    public func canonicalPDFData(for invoice: IssuedInvoice) async throws -> Data {
+        let reference = try await database.canonicalPDFReference(invoiceID: invoice.id)
+        let url = try recoveryURL(relativePath: reference.relativePath, directory: "Invoices")
+        let canonicalRoot = filesRoot.appendingPathComponent("Invoices", isDirectory: true).standardizedFileURL
+        let rootValues = try canonicalRoot.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        let fileValues = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard rootValues.isDirectory == true,
+              rootValues.isSymbolicLink != true,
+              fileValues.isRegularFile == true,
+              fileValues.isSymbolicLink != true,
+              url.resolvingSymlinksInPath().deletingLastPathComponent() == canonicalRoot.resolvingSymlinksInPath() else {
+            throw InvoiceError.corruptData("unsafe_canonical_pdf_file")
         }
-        let url = try recoveryURL(relativePath: relativePath, directory: "Invoices")
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])
         let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        guard actualHash == expectedHash else {
+        guard actualHash == reference.sha256 else {
             throw InvoiceError.corruptData("canonical_pdf_hash_mismatch")
         }
         return data

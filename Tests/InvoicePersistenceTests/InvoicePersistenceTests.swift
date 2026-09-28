@@ -430,10 +430,119 @@ final class InvoicePersistenceTests: XCTestCase {
         let canonicalData = try await service.canonicalPDFData(for: invoice)
         XCTAssertEqual(canonicalData, expected)
 
+        let rogueData = Data("another-customer-pdf".utf8)
+        let rogueID = UUID()
+        let roguePath = "Invoices/\(rogueID.uuidString.lowercased()).pdf"
+        let rogueURL = root.appendingPathComponent(roguePath)
+        try rogueData.write(to: rogueURL, options: .atomic)
+        var forgedInvoice = invoice
+        forgedInvoice.pdfRelativePath = roguePath
+        forgedInvoice.pdfSHA256 = SHA256.hash(data: rogueData).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(try await service.canonicalPDFData(for: forgedInvoice), expected)
+
         let path = try XCTUnwrap(invoice.pdfRelativePath)
         try Data("tampered".utf8).write(to: root.appendingPathComponent(path), options: .atomic)
         await XCTAssertThrowsErrorAsync {
             _ = try await service.canonicalPDFData(for: invoice)
+        }
+    }
+
+    func testCanonicalPDFReadRejectsSymlinkFile() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("canonical".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let canonicalURL = root.appendingPathComponent(try XCTUnwrap(invoice.pdfRelativePath))
+        let outsideURL = root.appendingPathComponent("outside.pdf")
+        try FileManager.default.moveItem(at: canonicalURL, to: outsideURL)
+        try FileManager.default.createSymbolicLink(at: canonicalURL, withDestinationURL: outsideURL)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await service.canonicalPDFData(for: invoice)
+        }
+    }
+
+    func testBackupValidationRejectsIssuedPayloadColumnMismatch() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("canonical".utf8) }
+        let invoice = try await service.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let package = root.appendingPathComponent("Poisoned.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        let hostile = try DatabaseQueue(path: package.appendingPathComponent("data.sqlite").path)
+        try await hostile.write { db in
+            let storedPayload: Data = try XCTUnwrap(Data.fetchOne(
+                db,
+                sql: "SELECT payload FROM issued_invoice WHERE id = ?",
+                arguments: [invoice.id.uuidString.lowercased()]
+            ))
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            var poisoned = try decoder.decode(IssuedInvoice.self, from: storedPayload)
+            poisoned.pdfRelativePath = "Invoices/\(UUID().uuidString.lowercased()).pdf"
+            poisoned.pdfSHA256 = String(repeating: "a", count: 64)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            try db.execute(
+                sql: "UPDATE issued_invoice SET payload = ? WHERE id = ?",
+                arguments: [try encoder.encode(poisoned), invoice.id.uuidString.lowercased()]
+            )
+        }
+        try hostile.close()
+        try refreshDatabaseManifestHash(package: package)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await backup.validate(packageURL: package)
+        }
+    }
+
+    func testBackupValidationRejectsDraftPayloadIdentityMismatch() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        try await database.saveDraft(fixture.draft)
+        let package = root.appendingPathComponent("PoisonedDraft.invoicebackup", isDirectory: true)
+        let backup = BackupService(database: database, filesRoot: root)
+        try await backup.export(to: package, appBuild: "tests")
+
+        let hostile = try DatabaseQueue(path: package.appendingPathComponent("data.sqlite").path)
+        try await hostile.write { db in
+            let storedPayload: Data = try XCTUnwrap(Data.fetchOne(
+                db,
+                sql: "SELECT payload FROM invoice_draft WHERE id = ?",
+                arguments: [fixture.draft.id.uuidString.lowercased()]
+            ))
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            var poisoned = try decoder.decode(InvoiceDraft.self, from: storedPayload)
+            poisoned.id = UUID()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            try db.execute(
+                sql: "UPDATE invoice_draft SET payload = ? WHERE id = ?",
+                arguments: [try encoder.encode(poisoned), fixture.draft.id.uuidString.lowercased()]
+            )
+        }
+        try hostile.close()
+        try refreshDatabaseManifestHash(package: package)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await backup.validate(packageURL: package)
         }
     }
 

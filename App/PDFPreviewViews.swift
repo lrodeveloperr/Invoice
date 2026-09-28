@@ -69,8 +69,18 @@ struct PDFPreviewIssueView: View {
             }
             .padding()
             Divider()
-            PDFKitView(data: package.pdfData)
-                .accessibilityLabel(language.text("preview.pdfAccessibility"))
+            ZStack {
+                PDFKitView(data: package.pdfData)
+                    .accessibilityLabel(language.text("preview.pdfAccessibility"))
+                if !store.hasPro {
+                    Text(language.text("preview.watermark"))
+                        .font(.system(size: 48, weight: .black, design: .rounded))
+                        .foregroundStyle(.secondary.opacity(0.22))
+                        .rotationEffect(.degrees(-24))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .navigationTitle(language.text("preview.title"))
         .navigationBarTitleDisplayMode(.inline)

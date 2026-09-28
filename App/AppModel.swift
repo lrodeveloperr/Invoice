@@ -53,6 +53,7 @@ final class AppModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
+            purgeCompletedDeletionQuarantines()
             try await issueService.recoverPendingFileOperations()
             let existingCustomers = try await database.customers()
             if existingCustomers.isEmpty,
@@ -255,13 +256,29 @@ final class AppModel: ObservableObject {
     func deleteAllData() async {
         await perform {
             guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
-            try await database.deleteAllDomainData()
-            for directory in ["Invoices", "Staging", "Recovery"] {
-                let url = self.root.appendingPathComponent(directory, isDirectory: true)
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try FileManager.default.removeItem(at: url)
+            let quarantine = self.root.appendingPathComponent(
+                ".Deletion-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+            var moved: [(source: URL, quarantined: URL)] = []
+            do {
+                for directory in ["Invoices", "Staging", "Recovery"] {
+                    let source = self.root.appendingPathComponent(directory, isDirectory: true)
+                    guard FileManager.default.fileExists(atPath: source.path) else { continue }
+                    let destination = quarantine.appendingPathComponent(directory, isDirectory: true)
+                    try FileManager.default.moveItem(at: source, to: destination)
+                    moved.append((source, destination))
                 }
+                try await database.deleteAllDomainData()
+            } catch {
+                for entry in moved.reversed() where FileManager.default.fileExists(atPath: entry.quarantined.path) {
+                    try? FileManager.default.moveItem(at: entry.quarantined, to: entry.source)
+                }
+                try? FileManager.default.removeItem(at: quarantine)
+                throw error
             }
+            try? FileManager.default.removeItem(at: quarantine)
             try await self.refresh()
         }
     }
@@ -270,6 +287,17 @@ final class AppModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do { try await work() } catch { errorMessage = String(describing: error) }
+    }
+
+    private func purgeCompletedDeletionQuarantines() {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix(".Deletion-") {
+            try? FileManager.default.removeItem(at: entry)
+        }
     }
 
     private func localDate(_ date: Date) throws -> LocalDate {
