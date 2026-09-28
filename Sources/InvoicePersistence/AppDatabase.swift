@@ -1003,7 +1003,7 @@ public actor AppDatabase {
 
     public func mergeContents(from sourcePath: String, dryRun: Bool = false) throws -> DatabaseMergeReport {
         try Self.validateDatabaseFile(at: sourcePath)
-        try writer.writeWithoutTransaction { db in
+        writer.writeWithoutTransaction { db in
             try? db.execute(sql: "DETACH DATABASE incoming")
         }
         do {
