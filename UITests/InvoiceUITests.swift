@@ -49,8 +49,11 @@ final class InvoiceUITests: XCTestCase {
         continueAfterFailure = false
         let app = launchApp(accessibilitySize: true)
 
-        let createInvoice = identified(app, "work.createInvoice")
-        XCTAssertTrue(createInvoice.waitForExistence(timeout: 15))
+        let listAction = identified(app, "work.createInvoice")
+        let detailAction = identified(app, "work.createInvoice.detail")
+        let listActionIsReachable = listAction.waitForExistence(timeout: 5) && listAction.isHittable
+        let createInvoice = listActionIsReachable ? listAction : detailAction
+        XCTAssertTrue(createInvoice.waitForExistence(timeout: 10))
         XCTAssertTrue(createInvoice.isHittable)
         attachScreenshot("accessibility-xxxl")
         createInvoice.tap()

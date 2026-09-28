@@ -113,11 +113,17 @@ struct WorkSplitView: View {
                 )
             }
         case nil:
-            EmptyDetailView(
-                title: language.text("work.select.title"),
-                systemImage: "wrench.and.screwdriver",
-                description: language.text("work.select.message")
-            )
+            ContentUnavailableView {
+                Label(language.text("work.select.title"), systemImage: "wrench.and.screwdriver")
+            } description: {
+                Text(language.text("work.select.message"))
+            } actions: {
+                Button(action: openInvoiceBuilder) {
+                    Label(language.text("work.buildInvoice"), systemImage: "doc.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("work.createInvoice.detail")
+            }
         }
     }
 }
