@@ -648,7 +648,10 @@ final class InvoicePersistenceTests: XCTestCase {
             draft: fixture.draft, business: fixture.business, customer: fixture.customer,
             sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
         )
-        let quarantine = root.appendingPathComponent(".Deletion-interrupted", isDirectory: true)
+        let quarantine = root.appendingPathComponent(
+            ".Deletion-\(UUID().uuidString.lowercased())",
+            isDirectory: true
+        )
         try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
         try FileManager.default.moveItem(
             at: root.appendingPathComponent("Invoices", isDirectory: true),

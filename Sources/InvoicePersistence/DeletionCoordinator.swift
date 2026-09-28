@@ -46,7 +46,10 @@ public actor DeletionCoordinator {
         let committedID = try await database.committedDeletionID()
         var interrupted: [URL] = []
         for quarantine in quarantines {
-            if quarantineID(for: quarantine) == committedID {
+            guard let quarantineID = quarantineID(for: quarantine) else {
+                throw InvoiceError.corruptData("invalid_deletion_quarantine_id")
+            }
+            if let committedID, quarantineID == committedID {
                 try fileManager.removeItem(at: quarantine)
             } else {
                 interrupted.append(quarantine)
