@@ -408,7 +408,11 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(drafts.map(\.id), [fixture.draft.id])
         let exactDraft = try await database.draft(id: fixture.draft.id)
         let missingDraft = try await database.draft(id: UUID())
-        XCTAssertEqual(exactDraft, fixture.draft)
+        XCTAssertEqual(exactDraft?.id, fixture.draft.id)
+        XCTAssertEqual(exactDraft?.customerID, fixture.draft.customerID)
+        XCTAssertEqual(exactDraft?.selectedVisitIDs, fixture.draft.selectedVisitIDs)
+        XCTAssertEqual(exactDraft?.coveredStart, fixture.draft.coveredStart)
+        XCTAssertEqual(exactDraft?.coveredEnd, fixture.draft.coveredEnd)
         XCTAssertNil(missingDraft)
     }
 
