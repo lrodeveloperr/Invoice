@@ -82,17 +82,8 @@ public actor IssueService {
     ) async throws -> IssuedInvoice {
         guard let original = try await database.invoice(id: originalID),
               original.status == .issued || original.status == .paid,
-              original.replacedByInvoiceID == nil,
-              replacement.lines.count == original.lines.count else {
+              original.replacedByInvoiceID == nil else {
             throw InvoiceError.invalidTransition
-        }
-        for (line, source) in zip(replacement.lines, original.lines) {
-            guard line.sourceVisitID == source.sourceVisitID,
-                  line.workDate == source.workDate,
-                  line.siteName == source.siteName,
-                  line.siteAddress == source.siteAddress else {
-                throw InvoiceError.corruptData("correction_source_mismatch")
-            }
         }
         let expected = try InvoiceCalculator.correctionSnapshot(
             id: replacement.id,
@@ -101,6 +92,11 @@ public actor IssueService {
             issueDate: replacement.issueDate,
             dueDate: replacement.dueDate,
             lines: replacement.lines.map(InvoiceCorrectionLine.init(invoiceLine:)),
+            issuer: replacement.issuer,
+            customerName: replacement.customerName,
+            customerAddress: replacement.customerAddress,
+            coveredStart: replacement.coveredStart,
+            coveredEnd: replacement.coveredEnd,
             issuedAt: replacement.issuedAt
         )
         guard Self.equivalentForCorrection(replacement, expected) else {
@@ -192,6 +188,7 @@ public actor IssueService {
         do {
             operationID = try await database.commitCorrection(
                 originalID: originalID,
+                expectedOriginal: original,
                 replacement: replacement,
                 stagedPath: stagedRelative,
                 finalPath: finalRelative,
@@ -309,6 +306,7 @@ public actor IssueService {
               lhs.status == .issued,
               lhs.paidDate == nil,
               lhs.replacesInvoiceID == nil,
+              lhs.replacesInvoiceNumber == nil,
               lhs.replacedByInvoiceID == nil,
               lhs.pdfRelativePath == nil,
               lhs.pdfSHA256 == nil,
@@ -349,6 +347,7 @@ public actor IssueService {
               lhs.status == .issued,
               lhs.paidDate == nil,
               lhs.replacesInvoiceID == rhs.replacesInvoiceID,
+              lhs.replacesInvoiceNumber == rhs.replacesInvoiceNumber,
               lhs.replacedByInvoiceID == nil,
               lhs.pdfRelativePath == nil,
               lhs.pdfSHA256 == nil,

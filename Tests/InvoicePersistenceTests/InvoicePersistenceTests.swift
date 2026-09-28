@@ -43,6 +43,21 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    func testFreeCustomerLimitCanRotateByDeactivatingCustomer() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        var first = Customer(name: "一")
+        let second = Customer(name: "二")
+        try await database.saveCustomer(first)
+        try await database.saveCustomer(second)
+        first.isActive = false
+        try await database.saveCustomer(first)
+        try await database.saveCustomer(Customer(name: "三"))
+        XCTAssertEqual(try await database.activeCustomerCount(), 2)
+        XCTAssertEqual(try await database.customers().filter(\.isActive).count, 2)
+    }
+
     func testServiceTemplatesRequireProAndRoundTripThroughBackup() async throws {
         let sourceRoot = try temporaryDirectory()
         let targetRoot = try temporaryDirectory()
@@ -393,6 +408,77 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(merge.databaseMerge).counts.customers, 0)
     }
 
+    func testMergeRestoreAcceptsReplacementFirstCorrectionLinks() async throws {
+        let sourceRoot = try temporaryDirectory()
+        let targetRoot = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: sourceRoot)
+            try? FileManager.default.removeItem(at: targetRoot)
+        }
+        let sourceDatabase = try AppDatabase(path: sourceRoot.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: sourceDatabase)
+        let service = IssueService(database: sourceDatabase, filesRoot: sourceRoot) { invoice in
+            Data("pdf-\(invoice.number)".utf8)
+        }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+        let number = try await sourceDatabase.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        )
+        let issuedReplacement = try await service.issueCorrectionPrepared(
+            originalID: original.id,
+            replacement: replacement,
+            pdfData: Data("replacement".utf8),
+            hasPro: true
+        )
+        let package = sourceRoot.appendingPathComponent("Correction.invoicebackup", isDirectory: true)
+        try await BackupService(database: sourceDatabase, filesRoot: sourceRoot)
+            .export(to: package, appBuild: "tests")
+
+        let exported = try DatabaseQueue(path: package.appendingPathComponent("data.sqlite").path)
+        try await exported.write { db in
+            try db.execute(sql: "DELETE FROM invoice_visit_link")
+            try db.execute(
+                sql: "INSERT INTO invoice_visit_link(invoice_id, visit_id) VALUES (?, ?)",
+                arguments: [
+                    issuedReplacement.id.uuidString.lowercased(),
+                    fixture.visit.id.uuidString.lowercased()
+                ]
+            )
+            try db.execute(
+                sql: "INSERT INTO invoice_visit_link(invoice_id, visit_id) VALUES (?, ?)",
+                arguments: [
+                    original.id.uuidString.lowercased(),
+                    fixture.visit.id.uuidString.lowercased()
+                ]
+            )
+        }
+        try exported.close()
+        try refreshDatabaseManifestHash(package: package)
+
+        let targetDatabase = try AppDatabase(path: targetRoot.appendingPathComponent("data.sqlite").path)
+        let backup = BackupService(database: targetDatabase, filesRoot: targetRoot)
+        let preflight = try await backup.preflightRestore(packageURL: package, mode: .merge)
+        XCTAssertTrue(try XCTUnwrap(preflight.databaseMerge).canCommit)
+        _ = try await backup.restore(packageURL: package, mode: .merge)
+        XCTAssertEqual(try await targetDatabase.invoices().count, 2)
+        try await targetDatabase.integrityCheck()
+    }
+
     func testPDFLayoutKeepsMinimumBodyFontContract() throws {
         let fixture = try Fixture.make()
         let invoice = try InvoiceCalculator.snapshot(
@@ -402,6 +488,10 @@ final class InvoicePersistenceTests: XCTestCase {
         let plan = try PDFLayoutPlanner.plan(invoice: invoice)
         XCTAssertFalse(plan.pages.isEmpty)
         XCTAssertTrue(plan.pages.flatMap(\.blocks).contains { $0.text.contains("2026-09-10") })
+        XCTAssertGreaterThanOrEqual(
+            PDFTypography.fontSize(for: .body, pdfStyle: .compact),
+            9
+        )
     }
 
     func testPDFLayoutPaginatesLongJapaneseDescriptionWithinPageBounds() throws {
@@ -583,6 +673,21 @@ final class InvoicePersistenceTests: XCTestCase {
         var correctionLines = original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
         correctionLines[0].description = "訂正後の作業内容"
         correctionLines[0].unitPrice = try Money(yen: 25_000)
+        correctionLines[0].workDate = try LocalDate(year: 2026, month: 9, day: 11)
+        correctionLines[0].siteName = "訂正後の現場"
+        correctionLines.append(InvoiceCorrectionLine(
+            sourceVisitID: correctionLines[0].sourceVisitID,
+            workDate: correctionLines[0].workDate,
+            siteName: correctionLines[0].siteName,
+            siteAddress: "訂正後の住所",
+            description: "追加明細",
+            quantity: try Quantity(decimalString: "1"),
+            unit: "式",
+            unitPrice: try Money(yen: 5_000),
+            taxRate: .standard10
+        ))
+        var correctedIssuer = original.issuer
+        correctedIssuer.issuerName = "青空メンテナンス合同会社"
         let number = try await database.proposedNumber(
             issueDate: original.issueDate,
             prefix: original.issuer.invoicePrefix
@@ -592,7 +697,10 @@ final class InvoicePersistenceTests: XCTestCase {
             original: original,
             issueDate: original.issueDate,
             dueDate: original.dueDate,
-            lines: correctionLines
+            lines: correctionLines,
+            issuer: correctedIssuer,
+            customerName: "山田商事株式会社",
+            customerAddress: "東京都千代田区"
         )
         let replacementBytes = Data("replacement-reviewed-pdf".utf8)
         let issuedReplacement = try await service.issueCorrectionPrepared(
@@ -611,12 +719,21 @@ final class InvoicePersistenceTests: XCTestCase {
         XCTAssertEqual(storedOriginal.status, .corrected)
         XCTAssertEqual(storedOriginal.replacedByInvoiceID, storedReplacement.id)
         XCTAssertEqual(storedReplacement.replacesInvoiceID, storedOriginal.id)
+        XCTAssertEqual(storedReplacement.replacesInvoiceNumber, storedOriginal.number)
         XCTAssertEqual(storedReplacement.lines[0].description, "訂正後の作業内容")
+        XCTAssertEqual(storedReplacement.lines.count, 2)
+        XCTAssertEqual(storedReplacement.lines[0].siteName, "訂正後の現場")
+        XCTAssertEqual(storedReplacement.issuer.issuerName, "青空メンテナンス合同会社")
+        XCTAssertEqual(storedReplacement.customerName, "山田商事株式会社")
         XCTAssertEqual(storedVisit.state, .billed(invoiceID: storedReplacement.id))
         let readOriginalBytes = try await service.canonicalPDFData(for: storedOriginal)
         let readReplacementBytes = try await service.canonicalPDFData(for: storedReplacement)
         XCTAssertEqual(readOriginalBytes, originalBytes)
         XCTAssertEqual(readReplacementBytes, replacementBytes)
+        let replacementPlan = try PDFLayoutPlanner.plan(invoice: storedReplacement)
+        XCTAssertTrue(replacementPlan.pages.flatMap(\.blocks).contains {
+            $0.text.contains(storedOriginal.number)
+        })
         try await database.integrityCheck()
     }
 
@@ -657,6 +774,204 @@ final class InvoicePersistenceTests: XCTestCase {
         let storedOriginal = try await database.invoice(id: original.id)
         XCTAssertEqual(storedOriginal?.status, .issued)
         XCTAssertNil(storedOriginal?.replacedByInvoiceID)
+    }
+
+    func testCorrectionRequiresProAfterPreviouslyProIssue() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+        let number = try await database.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await service.issueCorrectionPrepared(
+                originalID: original.id,
+                replacement: replacement,
+                pdfData: Data("replacement".utf8),
+                hasPro: false
+            )
+        }
+        let entitlement = try await database.entitlementUsage(hasPro: false)
+        let storedOriginal = try await database.invoice(id: original.id)
+        XCTAssertEqual(entitlement.firstCleanInvoiceID, original.id)
+        XCTAssertEqual(storedOriginal?.status, .issued)
+        XCTAssertNil(storedOriginal?.replacedByInvoiceID)
+    }
+
+    func testCorrectionCommitRejectsReplacementPreparedFromStaleOriginal() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databasePath = root.appendingPathComponent("data.sqlite").path
+        let database = try AppDatabase(path: databasePath)
+        let fixture = try await seed(database: database)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+        let number = try await database.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        )
+
+        let hostile = try DatabaseQueue(path: databasePath)
+        try await hostile.write { db in
+            let payload: Data = try XCTUnwrap(Data.fetchOne(
+                db,
+                sql: "SELECT payload FROM issued_invoice WHERE id = ?",
+                arguments: [original.id.uuidString.lowercased()]
+            ))
+            var object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: payload) as? [String: Any]
+            )
+            var issuer = try XCTUnwrap(object["issuer"] as? [String: Any])
+            issuer["issuerName"] = "別の発行者"
+            object["issuer"] = issuer
+            let changedPayload = try JSONSerialization.data(
+                withJSONObject: object,
+                options: [.sortedKeys, .withoutEscapingSlashes]
+            )
+            try db.execute(
+                sql: "UPDATE issued_invoice SET payload = ? WHERE id = ?",
+                arguments: [changedPayload, original.id.uuidString.lowercased()]
+            )
+        }
+        try hostile.close()
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await database.commitCorrection(
+                originalID: original.id,
+                expectedOriginal: original,
+                replacement: replacement,
+                stagedPath: "Staging/\(replacement.id.uuidString.lowercased()).pdf",
+                finalPath: "Invoices/\(replacement.id.uuidString.lowercased()).pdf",
+                pdfHash: String(repeating: "a", count: 64),
+                hasPro: true
+            )
+        }
+        let storedOriginal = try await database.invoice(id: original.id)
+        XCTAssertEqual(storedOriginal?.status, .issued)
+        XCTAssertNil(storedOriginal?.replacedByInvoiceID)
+    }
+
+    func testIntegrityRejectsCorrectionRelinkedToUnrelatedVisit() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databasePath = root.appendingPathComponent("data.sqlite").path
+        let database = try AppDatabase(path: databasePath)
+        let fixture = try await seed(database: database)
+        var unrelatedVisit = fixture.visit
+        unrelatedVisit.id = UUID()
+        unrelatedVisit.createdAt = Date()
+        unrelatedVisit.updatedAt = Date()
+        try await database.saveVisit(unrelatedVisit)
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+        let original = try await service.issue(
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+        let number = try await database.proposedNumber(
+            issueDate: original.issueDate,
+            prefix: original.issuer.invoicePrefix
+        )
+        let replacement = try InvoiceCalculator.correctionSnapshot(
+            number: number,
+            original: original,
+            issueDate: original.issueDate,
+            dueDate: original.dueDate,
+            lines: original.lines.map(InvoiceCorrectionLine.init(invoiceLine:))
+        )
+        let issuedReplacement = try await service.issueCorrectionPrepared(
+            originalID: original.id,
+            replacement: replacement,
+            pdfData: Data("replacement".utf8),
+            hasPro: true
+        )
+
+        let hostile = try DatabaseQueue(path: databasePath)
+        try await hostile.write { db in
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            var returnedVisit = fixture.visit
+            returnedVisit.state = .unbilled
+            returnedVisit.updatedAt = Date()
+            unrelatedVisit.state = .billed(invoiceID: issuedReplacement.id)
+            unrelatedVisit.updatedAt = Date()
+            try db.execute(
+                sql: "UPDATE visit SET state = 'unbilled', billed_invoice_id = NULL, payload = ?, updated_at = ? WHERE id = ?",
+                arguments: [
+                    try encoder.encode(returnedVisit),
+                    returnedVisit.updatedAt.timeIntervalSince1970,
+                    returnedVisit.id.uuidString.lowercased()
+                ]
+            )
+            try db.execute(
+                sql: "UPDATE visit SET state = 'billed', billed_invoice_id = ?, payload = ?, updated_at = ? WHERE id = ?",
+                arguments: [
+                    issuedReplacement.id.uuidString.lowercased(),
+                    try encoder.encode(unrelatedVisit),
+                    unrelatedVisit.updatedAt.timeIntervalSince1970,
+                    unrelatedVisit.id.uuidString.lowercased()
+                ]
+            )
+            try db.execute(
+                sql: "DELETE FROM invoice_visit_link WHERE invoice_id = ? AND visit_id = ?",
+                arguments: [
+                    issuedReplacement.id.uuidString.lowercased(),
+                    returnedVisit.id.uuidString.lowercased()
+                ]
+            )
+            try db.execute(
+                sql: "INSERT INTO invoice_visit_link(invoice_id, visit_id) VALUES (?, ?)",
+                arguments: [
+                    issuedReplacement.id.uuidString.lowercased(),
+                    unrelatedVisit.id.uuidString.lowercased()
+                ]
+            )
+        }
+        try hostile.close()
+
+        do {
+            try await database.integrityCheck()
+            XCTFail("Expected correction source-link mismatch")
+        } catch let error as InvoiceError {
+            XCTAssertEqual(error, .corruptData("invoice_source_visit_link_mismatch"))
+        }
     }
 
     func testBackupValidationRejectsIssuedPayloadColumnMismatch() async throws {

@@ -28,6 +28,18 @@ public struct PDFLayoutPlan: Hashable, Codable, Sendable {
     public let pages: [PDFPagePlan]
 }
 
+public enum PDFTypography {
+    public static func fontSize(for style: PDFTextBlock.Style, pdfStyle: PDFStyle) -> Double {
+        switch style {
+        case .title: pdfStyle == .compact ? 20 : 24
+        case .heading: pdfStyle == .compact ? 10 : 11
+        case .body: 9
+        case .amount: pdfStyle == .compact ? 9 : 10
+        case .caption: 9
+        }
+    }
+}
+
 public enum PDFLayoutPlanner {
     private static let bodyLineHeight = 13.0
     private static let rowPadding = 7.0
@@ -89,6 +101,9 @@ public enum PDFLayoutPlanner {
 
         append(labels.invoice, style: .title, height: 34)
         append("\(labels.number): \(invoice.number)", style: .body, height: 18)
+        if let originalNumber = invoice.replacesInvoiceNumber {
+            append("\(labels.correction): \(originalNumber)", style: .heading, height: 22)
+        }
         append("\(labels.issueDate): \(invoice.issueDate.description)", style: .body, height: 18)
         appendWrapped(invoice.customerName + labels.recipientSuffix, style: .heading, charactersPerLine: 32, minimumHeight: 28)
         if !invoice.customerAddress.isEmpty {
@@ -158,6 +173,7 @@ private struct Labels {
     let issueDate: String
     let dueDate: String
     let registration: String
+    let correction: String
     let details: String
     let subtotal: String
     let tax: String
@@ -167,11 +183,11 @@ private struct Labels {
     init(language: String) {
         if language == "en" {
             invoice = "Invoice"; number = "Number"; issueDate = "Issue date"; dueDate = "Due date"
-            registration = "Registration"; details = "Service details"; subtotal = "Subtotal"
+            registration = "Registration"; correction = "Correction of invoice"; details = "Service details"; subtotal = "Subtotal"
             tax = "Tax"; total = "Total"; recipientSuffix = ""
         } else {
             invoice = "請求書"; number = "請求書番号"; issueDate = "発行日"; dueDate = "支払期限"
-            registration = "登録番号"; details = "作業明細"; subtotal = "小計"
+            registration = "登録番号"; correction = "訂正対象の請求書"; details = "作業明細"; subtotal = "小計"
             tax = "消費税"; total = "合計"; recipientSuffix = " 御中"
         }
     }

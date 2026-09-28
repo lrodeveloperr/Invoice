@@ -350,6 +350,7 @@ public struct IssuedInvoice: Identifiable, Hashable, Codable, Sendable {
     public var status: InvoiceStatus
     public var paidDate: LocalDate?
     public var replacesInvoiceID: UUID?
+    public var replacesInvoiceNumber: String?
     public var replacedByInvoiceID: UUID?
     public var pdfRelativePath: String?
     public var pdfSHA256: String?

@@ -266,7 +266,12 @@ final class AppModel: ObservableObject {
         original: IssuedInvoice,
         issueDate: Date,
         dueDate: Date,
-        lines: [InvoiceCorrectionLine]
+        lines: [InvoiceCorrectionLine],
+        issuer: BusinessProfile,
+        customerName: String,
+        customerAddress: String,
+        coveredStart: Date,
+        coveredEnd: Date
     ) async throws -> CorrectionPreviewPackage {
         guard let database else { throw InvoiceError.corruptData("database_unavailable") }
         let localIssueDate = try localDate(issueDate)
@@ -279,7 +284,12 @@ final class AppModel: ObservableObject {
             original: original,
             issueDate: localIssueDate,
             dueDate: try localDate(dueDate),
-            lines: lines
+            lines: lines,
+            issuer: issuer,
+            customerName: customerName,
+            customerAddress: customerAddress,
+            coveredStart: try localDate(coveredStart),
+            coveredEnd: try localDate(coveredEnd)
         )
         let pdf = try CanonicalPDFRenderer.render(invoice: invoice, language: "ja")
         return CorrectionPreviewPackage(

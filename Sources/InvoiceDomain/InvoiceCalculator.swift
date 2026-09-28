@@ -103,7 +103,7 @@ public enum InvoiceCalculator {
             taxTotals: totals.taxes, subtotal: totals.subtotal, totalTax: totals.totalTax,
             grandTotal: totals.grandTotal, lineRounding: business.lineRounding,
             taxRounding: business.taxRounding, status: .issued, paidDate: nil,
-            replacesInvoiceID: nil, replacedByInvoiceID: nil,
+            replacesInvoiceID: nil, replacesInvoiceNumber: nil, replacedByInvoiceID: nil,
             pdfRelativePath: nil, pdfSHA256: nil, issuedAt: issuedAt
         )
     }
@@ -115,6 +115,11 @@ public enum InvoiceCalculator {
         issueDate: LocalDate,
         dueDate: LocalDate,
         lines: [InvoiceCorrectionLine],
+        issuer: BusinessProfile? = nil,
+        customerName: String? = nil,
+        customerAddress: String? = nil,
+        coveredStart: LocalDate? = nil,
+        coveredEnd: LocalDate? = nil,
         issuedAt: Date = Date()
     ) throws -> IssuedInvoice {
         guard !number.isEmpty else { throw InvoiceError.missingRequiredField("invoice.number") }
@@ -124,7 +129,24 @@ public enum InvoiceCalculator {
               original.pdfSHA256 != nil else {
             throw InvoiceError.invalidTransition
         }
-        guard issueDate <= dueDate, !lines.isEmpty else { throw InvoiceError.invalidDate }
+        let correctedIssuer = issuer ?? original.issuer
+        let correctedCustomerName = (customerName ?? original.customerName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let correctedCustomerAddress = customerAddress ?? original.customerAddress
+        let correctedCoveredStart = coveredStart ?? original.coveredStart
+        let correctedCoveredEnd = coveredEnd ?? original.coveredEnd
+        guard issueDate <= dueDate,
+              correctedCoveredStart <= correctedCoveredEnd,
+              !lines.isEmpty else { throw InvoiceError.invalidDate }
+        guard !correctedIssuer.issuerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw InvoiceError.missingRequiredField("business.issuerName")
+        }
+        guard correctedIssuer.registrationNumberIsValid else {
+            throw InvoiceError.missingRequiredField("business.registrationNumber")
+        }
+        guard !correctedCustomerName.isEmpty else {
+            throw InvoiceError.missingRequiredField("customer.name")
+        }
         let originalVisitIDs = Set(original.lines.map(\.sourceVisitID))
         guard Set(lines.map(\.sourceVisitID)) == originalVisitIDs else {
             throw InvoiceError.invalidTransition
@@ -160,12 +182,12 @@ public enum InvoiceCalculator {
             number: number,
             issueDate: issueDate,
             dueDate: dueDate,
-            coveredStart: original.coveredStart,
-            coveredEnd: original.coveredEnd,
-            issuer: original.issuer,
+            coveredStart: correctedCoveredStart,
+            coveredEnd: correctedCoveredEnd,
+            issuer: correctedIssuer,
             customerID: original.customerID,
-            customerName: original.customerName,
-            customerAddress: original.customerAddress,
+            customerName: correctedCustomerName,
+            customerAddress: correctedCustomerAddress,
             lines: snapshotLines,
             taxTotals: totals.taxes,
             subtotal: totals.subtotal,
@@ -176,6 +198,7 @@ public enum InvoiceCalculator {
             status: .issued,
             paidDate: nil,
             replacesInvoiceID: original.id,
+            replacesInvoiceNumber: original.number,
             replacedByInvoiceID: nil,
             pdfRelativePath: nil,
             pdfSHA256: nil,

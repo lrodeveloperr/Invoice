@@ -112,6 +112,11 @@ struct SettingsView: View {
                                 if !customer.billingAddress.isEmpty {
                                     Text(customer.billingAddress).font(.caption).foregroundStyle(.secondary)
                                 }
+                                if !customer.isActive {
+                                    Text(language.text("customer.inactive"))
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                         .buttonStyle(.plain)
@@ -442,6 +447,7 @@ private struct EditCustomerView: View {
     @State private var address: String
     @State private var closingDay: Int
     @State private var paymentTermDays: Int
+    @State private var isActive: Bool
     @State private var showPro = false
 
     init(customer: Customer, language: AppLanguage) {
@@ -451,6 +457,7 @@ private struct EditCustomerView: View {
         _address = State(initialValue: customer.billingAddress)
         _closingDay = State(initialValue: customer.closingDay ?? 0)
         _paymentTermDays = State(initialValue: customer.paymentTermDays)
+        _isActive = State(initialValue: customer.isActive)
     }
 
     var body: some View {
@@ -458,6 +465,10 @@ private struct EditCustomerView: View {
             Form {
                 TextField(language.text("field.customerName"), text: $name)
                 TextField(language.text("field.billingAddress"), text: $address, axis: .vertical)
+                Toggle(language.text("customer.active"), isOn: $isActive)
+                Text(language.text("customer.activeNote"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 if store.hasPro {
                     Picker(language.text("field.closingDay"), selection: $closingDay) {
                         Text(language.text("field.none")).tag(0)
@@ -496,6 +507,7 @@ private struct EditCustomerView: View {
         var edited = customer
         edited.name = name
         edited.billingAddress = address
+        edited.isActive = isActive
         if store.hasPro {
             edited.closingDay = closingDay == 0 ? nil : closingDay
             edited.paymentTermDays = paymentTermDays
@@ -504,6 +516,8 @@ private struct EditCustomerView: View {
             do {
                 try await model.saveCustomer(edited, hasPro: store.hasPro)
                 dismiss()
+            } catch let error as InvoiceError where error == .entitlementRequired {
+                showPro = true
             } catch {
                 model.errorMessage = language.errorText(error)
             }

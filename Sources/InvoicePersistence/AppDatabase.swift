@@ -3,7 +3,7 @@ import GRDB
 import InvoiceDomain
 
 public actor AppDatabase {
-    public static let schemaVersion = 4
+    public static let schemaVersion = 5
 
     private let writer: DatabasePool
 
@@ -167,6 +167,33 @@ public actor AppDatabase {
             try db.execute(
                 sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
                 arguments: ["v4-service-templates", Date().timeIntervalSince1970, "schema-v4"]
+            )
+        }
+        migrator.registerMigration("v5-correction-link-guard") { db in
+            try db.execute(sql: "DROP TRIGGER IF EXISTS prevent_duplicate_active_invoice_link")
+            try db.execute(sql: """
+                CREATE TRIGGER prevent_duplicate_active_invoice_link
+                BEFORE INSERT ON invoice_visit_link
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM issued_invoice AS candidate
+                    WHERE candidate.id = NEW.invoice_id
+                      AND candidate.status IN ('issued', 'paid', 'needsRecovery')
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM invoice_visit_link AS link
+                    JOIN issued_invoice AS invoice ON invoice.id = link.invoice_id
+                    WHERE link.visit_id = NEW.visit_id
+                      AND invoice.status IN ('issued', 'paid', 'needsRecovery')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'visit_already_linked_to_active_invoice');
+                END
+                """)
+            try db.execute(
+                sql: "INSERT INTO migration_log(identifier, applied_at, app_build) VALUES (?, ?, ?)",
+                arguments: ["v5-correction-link-guard", Date().timeIntervalSince1970, "schema-v5"]
             )
         }
         return migrator
@@ -474,7 +501,15 @@ public actor AppDatabase {
     public func entitlementUsage(hasPro: Bool) throws -> EntitlementState {
         try writer.read { db in
             let value: String? = try String.fetchOne(db, sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1")
-            return EntitlementState(hasPro: hasPro, firstCleanInvoiceID: value.flatMap(UUID.init(uuidString:)))
+            var effectiveID = value.flatMap(UUID.init(uuidString:))
+            if !hasPro, effectiveID == nil,
+               let existing: String = try String.fetchOne(
+                   db,
+                   sql: "SELECT id FROM issued_invoice ORDER BY issued_at, id LIMIT 1"
+               ) {
+                effectiveID = UUID(uuidString: existing)
+            }
+            return EntitlementState(hasPro: hasPro, firstCleanInvoiceID: effectiveID)
         }
     }
 
@@ -493,7 +528,14 @@ public actor AppDatabase {
         pdfHash: String,
         consumeFreeAllowance: Bool
     ) throws -> UUID {
-        guard !sourceVisitIDs.isEmpty,
+        guard invoice.status == .issued,
+              invoice.paidDate == nil,
+              invoice.replacesInvoiceID == nil,
+              invoice.replacesInvoiceNumber == nil,
+              invoice.replacedByInvoiceID == nil,
+              invoice.pdfRelativePath == nil,
+              invoice.pdfSHA256 == nil,
+              !sourceVisitIDs.isEmpty,
               Set(sourceVisitIDs).count == sourceVisitIDs.count,
               Set(sourceVisitIDs) == Set(invoice.lines.map(\.sourceVisitID)) else {
             throw InvoiceError.invalidTransition
@@ -545,6 +587,7 @@ public actor AppDatabase {
 
     public func commitCorrection(
         originalID: UUID,
+        expectedOriginal: IssuedInvoice,
         replacement: IssuedInvoice,
         stagedPath: String,
         finalPath: String,
@@ -552,6 +595,7 @@ public actor AppDatabase {
         hasPro: Bool
     ) throws -> UUID {
         guard replacement.replacesInvoiceID == originalID,
+              replacement.replacesInvoiceNumber == expectedOriginal.number,
               replacement.replacedByInvoiceID == nil,
               replacement.status == .issued,
               replacement.paidDate == nil,
@@ -565,11 +609,7 @@ public actor AppDatabase {
         let operationID = UUID()
 
         try writer.write { db in
-            let freeIssueID: String? = try String.fetchOne(
-                db,
-                sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1"
-            )
-            guard hasPro || freeIssueID == nil else { throw InvoiceError.entitlementRequired }
+            guard hasPro else { throw InvoiceError.entitlementRequired }
 
             guard let originalRow = try Row.fetchOne(
                 db,
@@ -582,8 +622,27 @@ public actor AppDatabase {
             ) else { throw InvoiceError.corruptData("missing_invoice") }
             var original = try Self.validatedIssuedInvoice(originalRow)
             guard original.status == .issued || original.status == .paid,
-                  original.replacedByInvoiceID == nil else {
+                  original.replacedByInvoiceID == nil,
+                  original == expectedOriginal else {
                 throw InvoiceError.invalidTransition
+            }
+
+            let expectedReplacement = try InvoiceCalculator.correctionSnapshot(
+                id: replacement.id,
+                number: replacement.number,
+                original: original,
+                issueDate: replacement.issueDate,
+                dueDate: replacement.dueDate,
+                lines: replacement.lines.map(InvoiceCorrectionLine.init(invoiceLine:)),
+                issuer: replacement.issuer,
+                customerName: replacement.customerName,
+                customerAddress: replacement.customerAddress,
+                coveredStart: replacement.coveredStart,
+                coveredEnd: replacement.coveredEnd,
+                issuedAt: replacement.issuedAt
+            )
+            guard Self.equivalentCorrection(replacement, expectedReplacement) else {
+                throw InvoiceError.corruptData("prepared_correction_mismatch")
             }
 
             let linkedVisitStrings = try String.fetchAll(
@@ -999,7 +1058,16 @@ public actor AppDatabase {
             try db.execute(sql: "INSERT OR IGNORE INTO visit SELECT * FROM incoming.visit")
             try db.execute(sql: "INSERT OR IGNORE INTO invoice_draft SELECT * FROM incoming.invoice_draft")
             try db.execute(sql: "INSERT OR IGNORE INTO issued_invoice SELECT * FROM incoming.issued_invoice")
-            try db.execute(sql: "INSERT OR IGNORE INTO invoice_visit_link SELECT * FROM incoming.invoice_visit_link")
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO invoice_visit_link(invoice_id, visit_id)
+                SELECT link.invoice_id, link.visit_id
+                FROM incoming.invoice_visit_link AS link
+                JOIN incoming.issued_invoice AS invoice ON invoice.id = link.invoice_id
+                ORDER BY CASE
+                    WHEN invoice.status IN ('issued', 'paid', 'needsRecovery') THEN 1
+                    ELSE 0
+                END, invoice.issued_at, link.invoice_id, link.visit_id
+                """)
             try db.execute(sql: """
                 INSERT INTO invoice_sequence(year, next_value)
                 SELECT year, next_value FROM incoming.invoice_sequence
@@ -1050,7 +1118,24 @@ public actor AppDatabase {
                 """
         ).map(validatedIssuedInvoice)
         let invoicesByID = Dictionary(uniqueKeysWithValues: invoices.map { ($0.id, $0) })
+        let linkRows = try Row.fetchAll(
+            db,
+            sql: "SELECT invoice_id, visit_id FROM invoice_visit_link ORDER BY invoice_id, visit_id"
+        )
+        var linkedVisitsByInvoice: [UUID: Set<UUID>] = [:]
+        for row in linkRows {
+            let invoiceIDString: String = row["invoice_id"]
+            let visitIDString: String = row["visit_id"]
+            guard let invoiceID = UUID(uuidString: invoiceIDString),
+                  let visitID = UUID(uuidString: visitIDString) else {
+                throw InvoiceError.corruptData("invalid_invoice_visit_link_id")
+            }
+            linkedVisitsByInvoice[invoiceID, default: []].insert(visitID)
+        }
         for invoice in invoices {
+            guard Set(invoice.lines.map(\.sourceVisitID)) == linkedVisitsByInvoice[invoice.id, default: []] else {
+                throw InvoiceError.corruptData("invoice_source_visit_link_mismatch")
+            }
             if invoice.status == .corrected {
                 guard let replacementID = invoice.replacedByInvoiceID,
                       replacementID != invoice.id,
@@ -1062,10 +1147,15 @@ public actor AppDatabase {
             }
             if let originalID = invoice.replacesInvoiceID {
                 guard originalID != invoice.id,
-                      invoicesByID[originalID]?.status == .corrected,
-                      invoicesByID[originalID]?.replacedByInvoiceID == invoice.id else {
+                      let originalInvoice = invoicesByID[originalID],
+                      originalInvoice.status == .corrected,
+                      originalInvoice.replacedByInvoiceID == invoice.id,
+                      invoice.replacesInvoiceNumber == originalInvoice.number,
+                      linkedVisitsByInvoice[originalID, default: []] == linkedVisitsByInvoice[invoice.id, default: []] else {
                     throw InvoiceError.corruptData("invalid_correction_back_link")
                 }
+            } else if invoice.replacesInvoiceNumber != nil {
+                throw InvoiceError.corruptData("correction_number_without_link")
             }
 
             var seen = Set<UUID>()
@@ -1253,6 +1343,47 @@ public actor AppDatabase {
             LEFT JOIN main.\(table) ON main.\(table).id = incoming.\(table).id
             WHERE main.\(table).id IS NULL
             """) ?? 0
+    }
+
+    private static func equivalentCorrection(_ lhs: IssuedInvoice, _ rhs: IssuedInvoice) -> Bool {
+        guard lhs.id == rhs.id,
+              lhs.number == rhs.number,
+              lhs.issueDate == rhs.issueDate,
+              lhs.dueDate == rhs.dueDate,
+              lhs.coveredStart == rhs.coveredStart,
+              lhs.coveredEnd == rhs.coveredEnd,
+              lhs.issuer == rhs.issuer,
+              lhs.customerID == rhs.customerID,
+              lhs.customerName == rhs.customerName,
+              lhs.customerAddress == rhs.customerAddress,
+              lhs.taxTotals == rhs.taxTotals,
+              lhs.subtotal == rhs.subtotal,
+              lhs.totalTax == rhs.totalTax,
+              lhs.grandTotal == rhs.grandTotal,
+              lhs.lineRounding == rhs.lineRounding,
+              lhs.taxRounding == rhs.taxRounding,
+              lhs.status == .issued,
+              lhs.paidDate == nil,
+              lhs.replacesInvoiceID == rhs.replacesInvoiceID,
+              lhs.replacesInvoiceNumber == rhs.replacesInvoiceNumber,
+              lhs.replacedByInvoiceID == nil,
+              lhs.pdfRelativePath == nil,
+              lhs.pdfSHA256 == nil,
+              lhs.issuedAt == rhs.issuedAt,
+              lhs.lines.count == rhs.lines.count else { return false }
+        return zip(lhs.lines, rhs.lines).allSatisfy { left, right in
+            left.sourceVisitID == right.sourceVisitID &&
+            left.workDate == right.workDate &&
+            left.siteName == right.siteName &&
+            left.siteAddress == right.siteAddress &&
+            left.position == right.position &&
+            left.description == right.description &&
+            left.quantity == right.quantity &&
+            left.unit == right.unit &&
+            left.unitPrice == right.unitPrice &&
+            left.taxRate == right.taxRate &&
+            left.net == right.net
+        }
     }
 
     private static func encode<T: Encodable>(_ value: T) throws -> Data {

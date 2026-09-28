@@ -22,7 +22,15 @@ public enum CanonicalPDFRenderer {
                 if pageIndex == 0,
                    let logoData = invoice.issuer.logoPNGData,
                    let logo = UIImage(data: logoData) {
-                    let size = CGSize(width: 54, height: 54)
+                    let maximumSize = CGSize(width: 96, height: 54)
+                    let scale = min(
+                        maximumSize.width / max(logo.size.width, 1),
+                        maximumSize.height / max(logo.size.height, 1)
+                    )
+                    let size = CGSize(
+                        width: logo.size.width * scale,
+                        height: logo.size.height * scale
+                    )
                     let rect = CGRect(
                         x: bounds.maxX - PDFLayoutPlan.margin - size.width,
                         y: PDFLayoutPlan.margin,
@@ -42,22 +50,22 @@ public enum CanonicalPDFRenderer {
         let accent = UIColor(red: 0.08, green: 0.25, blue: 0.42, alpha: 1)
         switch block.style {
         case .title:
-            font = .systemFont(ofSize: pdfStyle == .compact ? 20 : 24, weight: .bold)
+            font = .systemFont(ofSize: CGFloat(PDFTypography.fontSize(for: block.style, pdfStyle: pdfStyle)), weight: .bold)
             color = pdfStyle == .modern ? accent : .label
             alignment = .left
         case .heading:
-            font = .systemFont(ofSize: pdfStyle == .compact ? 10 : 11, weight: .semibold)
+            font = .systemFont(ofSize: CGFloat(PDFTypography.fontSize(for: block.style, pdfStyle: pdfStyle)), weight: .semibold)
             color = pdfStyle == .modern ? accent : .label
             alignment = .left
         case .body:
-            font = .systemFont(ofSize: pdfStyle == .compact ? 8 : 9, weight: .regular)
+            font = .systemFont(ofSize: CGFloat(PDFTypography.fontSize(for: block.style, pdfStyle: pdfStyle)), weight: .regular)
             color = .label
             alignment = .left
         case .amount:
-            font = .monospacedDigitSystemFont(ofSize: pdfStyle == .compact ? 9 : 10, weight: .semibold)
+            font = .monospacedDigitSystemFont(ofSize: CGFloat(PDFTypography.fontSize(for: block.style, pdfStyle: pdfStyle)), weight: .semibold)
             color = pdfStyle == .modern ? accent : .label
             alignment = .right
-        case .caption: font = .systemFont(ofSize: 9, weight: .regular); color = .secondaryLabel; alignment = .right
+        case .caption: font = .systemFont(ofSize: CGFloat(PDFTypography.fontSize(for: block.style, pdfStyle: pdfStyle)), weight: .regular); color = .secondaryLabel; alignment = .right
         }
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
@@ -66,6 +74,7 @@ public enum CanonicalPDFRenderer {
         let rect = CGRect(x: block.frame.x, y: block.frame.y, width: block.frame.width, height: block.frame.height)
         (block.text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes, context: nil)
     }
+
 }
 #else
 public enum CanonicalPDFRenderer {

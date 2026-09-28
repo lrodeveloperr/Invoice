@@ -84,7 +84,16 @@ private struct InvoiceDetailView: View {
     @State private var showCorrection = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if let relationshipText {
+                Label(relationshipText, systemImage: "arrow.triangle.branch")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(Color.accentColor.opacity(0.1))
+                Divider()
+            }
             if let pdfData {
                 PDFKitView(data: pdfData)
                     .accessibilityLabel(language.text("preview.pdfAccessibility"))
@@ -144,6 +153,17 @@ private struct InvoiceDetailView: View {
         } message: {
             Text(language.text("invoice.void.confirmMessage"))
         }
+    }
+
+    private var relationshipText: String? {
+        if let originalNumber = invoice.replacesInvoiceNumber {
+            return String(format: language.text("correction.replacesFormat"), originalNumber)
+        }
+        if let replacementID = invoice.replacedByInvoiceID,
+           let replacement = model.invoices.first(where: { $0.id == replacementID }) {
+            return String(format: language.text("correction.replacedByFormat"), replacement.number)
+        }
+        return nil
     }
 
     private func loadPDF() async {

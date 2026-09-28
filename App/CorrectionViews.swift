@@ -5,9 +5,9 @@ import SwiftUI
 private struct CorrectionLineForm: Identifiable {
     let id: UUID
     let sourceVisitID: UUID
-    let workDate: LocalDate
-    let siteName: String
-    let siteAddress: String
+    var workDate: Date
+    var siteName: String
+    var siteAddress: String
     var description: String
     var quantity: String
     var unit: String
@@ -17,7 +17,7 @@ private struct CorrectionLineForm: Identifiable {
     init(_ line: IssuedInvoiceLine) {
         id = line.id
         sourceVisitID = line.sourceVisitID
-        workDate = line.workDate
+        workDate = dateValue(line.workDate)
         siteName = line.siteName
         siteAddress = line.siteAddress
         description = line.description
@@ -27,13 +27,33 @@ private struct CorrectionLineForm: Identifiable {
         taxBasisPoints = line.taxRate.basisPoints
     }
 
+    init(copying line: CorrectionLineForm) {
+        id = UUID()
+        sourceVisitID = line.sourceVisitID
+        workDate = line.workDate
+        siteName = line.siteName
+        siteAddress = line.siteAddress
+        description = line.description
+        quantity = line.quantity
+        unit = line.unit
+        unitPrice = line.unitPrice
+        taxBasisPoints = line.taxBasisPoints
+    }
+
     func correctionLine() throws -> InvoiceCorrectionLine {
         guard let yen = Int64(unitPrice) else { throw InvoiceError.invalidMoney }
         let taxRate = TaxRate.launchCatalog.first(where: { $0.basisPoints == taxBasisPoints })
         guard let taxRate else { throw InvoiceError.invalidTaxRate }
+        let components = Calendar(identifier: .gregorian).dateComponents(
+            [.year, .month, .day],
+            from: workDate
+        )
+        guard let year = components.year, let month = components.month, let day = components.day else {
+            throw InvoiceError.invalidDate
+        }
         return InvoiceCorrectionLine(
             sourceVisitID: sourceVisitID,
-            workDate: workDate,
+            workDate: try LocalDate(year: year, month: month, day: day),
             siteName: siteName,
             siteAddress: siteAddress,
             description: description,
@@ -53,6 +73,14 @@ struct CorrectionFlowView: View {
     let language: AppLanguage
     @State private var issueDate: Date
     @State private var dueDate: Date
+    @State private var coveredStart: Date
+    @State private var coveredEnd: Date
+    @State private var issuerName: String
+    @State private var issuerAddress: String
+    @State private var registrationNumber: String
+    @State private var bankDetails: String
+    @State private var customerName: String
+    @State private var customerAddress: String
     @State private var lines: [CorrectionLineForm]
     @State private var preview: CorrectionPreviewPackage?
     @State private var preparing = false
@@ -67,6 +95,14 @@ struct CorrectionFlowView: View {
         let term = Calendar(identifier: .gregorian).date(byAdding: .day, value: 30, to: today) ?? today
         _issueDate = State(initialValue: today)
         _dueDate = State(initialValue: term)
+        _coveredStart = State(initialValue: dateValue(original.coveredStart))
+        _coveredEnd = State(initialValue: dateValue(original.coveredEnd))
+        _issuerName = State(initialValue: original.issuer.issuerName)
+        _issuerAddress = State(initialValue: original.issuer.postalAddress)
+        _registrationNumber = State(initialValue: original.issuer.registrationNumber ?? "")
+        _bankDetails = State(initialValue: original.issuer.bankDetails)
+        _customerName = State(initialValue: original.customerName)
+        _customerAddress = State(initialValue: original.customerAddress)
         _lines = State(initialValue: original.lines.map(CorrectionLineForm.init))
     }
 
@@ -98,6 +134,8 @@ struct CorrectionFlowView: View {
         .sheet(item: $sharedFile) { file in
             ShareSheet(items: [file.url]).onDisappear { dismiss() }
         }
+        .task { applySavedPaymentTerm() }
+        .onChange(of: issueDate) { _, _ in applySavedPaymentTerm() }
     }
 
     private var editor: some View {
@@ -111,11 +149,23 @@ struct CorrectionFlowView: View {
             Section(language.text("correction.dates")) {
                 DatePicker(language.text("correction.issueDate"), selection: $issueDate, displayedComponents: .date)
                 DatePicker(language.text("correction.dueDate"), selection: $dueDate, in: issueDate..., displayedComponents: .date)
+                DatePicker(language.text("field.startDate"), selection: $coveredStart, displayedComponents: .date)
+                DatePicker(language.text("field.endDate"), selection: $coveredEnd, in: coveredStart..., displayedComponents: .date)
+            }
+            Section(language.text("correction.parties")) {
+                TextField(language.text("field.customerName"), text: $customerName)
+                TextField(language.text("field.billingAddress"), text: $customerAddress, axis: .vertical)
+                TextField(language.text("field.issuerName"), text: $issuerName)
+                TextField(language.text("field.address"), text: $issuerAddress, axis: .vertical)
+                TextField(language.text("field.registration"), text: $registrationNumber)
+                    .textInputAutocapitalization(.characters)
+                TextField(language.text("field.bank"), text: $bankDetails, axis: .vertical)
             }
             ForEach($lines) { $line in
                 Section(language.text("correction.line")) {
-                    LabeledContent(language.text("field.date"), value: localDateText(line.workDate))
-                    LabeledContent(language.text("field.site"), value: line.siteName)
+                    DatePicker(language.text("field.date"), selection: $line.workDate, displayedComponents: .date)
+                    TextField(language.text("field.siteName"), text: $line.siteName)
+                    TextField(language.text("field.address"), text: $line.siteAddress, axis: .vertical)
                     TextField(language.text("field.service"), text: $line.description, axis: .vertical)
                     TextField(language.text("field.quantity"), text: $line.quantity)
                         .keyboardType(.decimalPad)
@@ -127,7 +177,21 @@ struct CorrectionFlowView: View {
                             Text(rate.label).tag(rate.basisPoints)
                         }
                     }
+                    Button(role: .destructive) {
+                        removeLine(line.id)
+                    } label: {
+                        Label(language.text("correction.removeLine"), systemImage: "minus.circle")
+                    }
+                    .disabled(lines.filter { $0.sourceVisitID == line.sourceVisitID }.count <= 1)
                 }
+            }
+            Section {
+                Button {
+                    if let last = lines.last { lines.append(CorrectionLineForm(copying: last)) }
+                } label: {
+                    Label(language.text("correction.addLine"), systemImage: "plus.circle")
+                }
+                .disabled(lines.isEmpty)
             }
             Section {
                 Button {
@@ -185,12 +249,41 @@ struct CorrectionFlowView: View {
                     original: original,
                     issueDate: issueDate,
                     dueDate: dueDate,
-                    lines: try lines.map { try $0.correctionLine() }
+                    lines: try lines.map { try $0.correctionLine() },
+                    issuer: correctedIssuer,
+                    customerName: customerName,
+                    customerAddress: customerAddress,
+                    coveredStart: coveredStart,
+                    coveredEnd: coveredEnd
                 )
             } catch {
                 model.errorMessage = language.errorText(error)
             }
         }
+    }
+
+    private var correctedIssuer: BusinessProfile {
+        var issuer = original.issuer
+        issuer.issuerName = issuerName
+        issuer.postalAddress = issuerAddress
+        issuer.registrationNumber = registrationNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil
+            : registrationNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        issuer.bankDetails = bankDetails
+        return issuer
+    }
+
+    private func applySavedPaymentTerm() {
+        guard let customer = model.customers.first(where: { $0.id == original.customerID }) else { return }
+        dueDate = Calendar(identifier: .gregorian).date(
+            byAdding: .day,
+            value: customer.paymentTermDays,
+            to: issueDate
+        ) ?? dueDate
+    }
+
+    private func removeLine(_ id: UUID) {
+        lines.removeAll { $0.id == id }
     }
 
     private func issue(_ package: CorrectionPreviewPackage) {
