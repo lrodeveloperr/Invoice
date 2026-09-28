@@ -239,13 +239,15 @@ private struct VisitEditorView: View {
     var body: some View {
         Form {
             if !model.serviceTemplates.filter(\.isActive).isEmpty {
-                Section(language.text("template.use")) {
+                Section {
                     Picker(language.text("template.choose"), selection: $templateID) {
                         Text(language.text("field.choose")).tag(UUID?.none)
                         ForEach(model.serviceTemplates.filter(\.isActive)) { template in
                             Text(template.title).tag(Optional(template.id))
                         }
                     }
+                } header: {
+                    Text(language.text("template.use"))
                 } footer: {
                     Text(store.hasPro ? language.text("template.useNote") : language.text("template.pro"))
                 }

@@ -54,6 +54,9 @@ struct SettingsView: View {
     @State private var showAddTemplate = false
 
     var body: some View {
+        let logoButtonTitle = logoPNGData == nil
+            ? language.text("logo.choose")
+            : language.text("logo.replace")
         NavigationStack {
             Form {
                 Section(language.text("settings.language")) {
@@ -80,12 +83,7 @@ struct SettingsView: View {
                             }
                         }
                         PhotosPicker(selection: $logoItem, matching: .images) {
-                            Label(
-                                logoPNGData == nil
-                                    ? language.text("logo.choose")
-                                    : language.text("logo.replace"),
-                                systemImage: "photo.badge.plus"
-                            )
+                            Label(logoButtonTitle, systemImage: "photo.badge.plus")
                         }
                         if logoPNGData != nil {
                             Button(language.text("logo.remove"), role: .destructive) {

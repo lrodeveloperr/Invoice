@@ -56,6 +56,8 @@ targets:
     info:
       path: App/Info.plist
       properties:
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
         CFBundleDocumentTypes:
           - CFBundleTypeName: Invoice Backup
             CFBundleTypeRole: Editor
