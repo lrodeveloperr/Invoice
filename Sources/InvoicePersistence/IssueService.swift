@@ -104,6 +104,7 @@ public actor IssueService {
         }
         return try await commitCorrection(
             originalID: originalID,
+            expectedOriginal: original,
             replacement: replacement,
             pdfData: pdfData,
             hasPro: hasPro
@@ -164,6 +165,7 @@ public actor IssueService {
 
     private func commitCorrection(
         originalID: UUID,
+        expectedOriginal: IssuedInvoice,
         replacement: IssuedInvoice,
         pdfData: Data,
         hasPro: Bool
@@ -188,7 +190,7 @@ public actor IssueService {
         do {
             operationID = try await database.commitCorrection(
                 originalID: originalID,
-                expectedOriginal: original,
+                expectedOriginal: expectedOriginal,
                 replacement: replacement,
                 stagedPath: stagedRelative,
                 finalPath: finalRelative,
