@@ -572,6 +572,59 @@ final class InvoicePersistenceTests: XCTestCase {
         try await database.integrityCheck()
     }
 
+    func testInterruptedDeletionRestoresCanonicalDirectoryWhenDatabaseStillHasData() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let expected = Data("canonical".utf8)
+        let issueService = IssueService(database: database, filesRoot: root) { _ in expected }
+        let invoice = try await issueService.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let quarantine = root.appendingPathComponent(".Deletion-interrupted", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: root.appendingPathComponent("Invoices", isDirectory: true),
+            to: quarantine.appendingPathComponent("Invoices", isDirectory: true)
+        )
+
+        try await DeletionCoordinator(database: database, filesRoot: root).reconcileInterruptedDeletion()
+
+        let restoredData = try await issueService.canonicalPDFData(for: invoice)
+        let databaseIsEmptyAfterRestore = try await database.domainIsEmpty()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
+        XCTAssertEqual(restoredData, expected)
+        XCTAssertFalse(databaseIsEmptyAfterRestore)
+    }
+
+    func testCommittedDeletionPurgesQuarantineOnReconciliation() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let issueService = IssueService(database: database, filesRoot: root) { _ in Data("canonical".utf8) }
+        _ = try await issueService.issue(
+            draft: fixture.draft, business: fixture.business, customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
+        )
+        let quarantine = root.appendingPathComponent(".Deletion-committed", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        try FileManager.default.moveItem(
+            at: root.appendingPathComponent("Invoices", isDirectory: true),
+            to: quarantine.appendingPathComponent("Invoices", isDirectory: true)
+        )
+        try await database.deleteAllDomainData()
+
+        try await DeletionCoordinator(database: database, filesRoot: root).reconcileInterruptedDeletion()
+
+        let databaseIsEmpty = try await database.domainIsEmpty()
+        XCTAssertTrue(databaseIsEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Invoices").path))
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("invoice-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

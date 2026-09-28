@@ -395,6 +395,18 @@ public actor AppDatabase {
         }
     }
 
+    public func domainIsEmpty() throws -> Bool {
+        try writer.read { db in
+            for table in [
+                "business_profile", "customer", "site", "visit", "invoice_draft", "issued_invoice"
+            ] {
+                let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
+                if count != 0 { return false }
+            }
+            return true
+        }
+    }
+
     public func entitlementUsage(hasPro: Bool) throws -> EntitlementState {
         try writer.read { db in
             let value: String? = try String.fetchOne(db, sql: "SELECT first_clean_invoice_id FROM entitlement_usage WHERE singleton = 1")

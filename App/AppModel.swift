@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     private let root: URL
     private let database: AppDatabase?
     private let issueService: IssueService?
+    private let deletionCoordinator: DeletionCoordinator?
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -38,22 +39,24 @@ final class AppModel: ObservableObject {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let createdDatabase = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
             database = createdDatabase
+            deletionCoordinator = DeletionCoordinator(database: createdDatabase, filesRoot: root)
             issueService = IssueService(database: createdDatabase, filesRoot: root) { invoice in
                 try CanonicalPDFRenderer.render(invoice: invoice, language: "ja")
             }
         } catch {
             database = nil
             issueService = nil
+            deletionCoordinator = nil
             errorMessage = String(describing: error)
         }
     }
 
     func bootstrap() async {
-        guard let database, let issueService else { return }
+        guard let database, let issueService, let deletionCoordinator else { return }
         isBusy = true
         defer { isBusy = false }
         do {
-            purgeCompletedDeletionQuarantines()
+            try await deletionCoordinator.reconcileInterruptedDeletion()
             try await issueService.recoverPendingFileOperations()
             let existingCustomers = try await database.customers()
             if existingCustomers.isEmpty,
@@ -255,30 +258,10 @@ final class AppModel: ObservableObject {
 
     func deleteAllData() async {
         await perform {
-            guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
-            let quarantine = self.root.appendingPathComponent(
-                ".Deletion-\(UUID().uuidString)",
-                isDirectory: true
-            )
-            try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
-            var moved: [(source: URL, quarantined: URL)] = []
-            do {
-                for directory in ["Invoices", "Staging", "Recovery"] {
-                    let source = self.root.appendingPathComponent(directory, isDirectory: true)
-                    guard FileManager.default.fileExists(atPath: source.path) else { continue }
-                    let destination = quarantine.appendingPathComponent(directory, isDirectory: true)
-                    try FileManager.default.moveItem(at: source, to: destination)
-                    moved.append((source, destination))
-                }
-                try await database.deleteAllDomainData()
-            } catch {
-                for entry in moved.reversed() where FileManager.default.fileExists(atPath: entry.quarantined.path) {
-                    try? FileManager.default.moveItem(at: entry.quarantined, to: entry.source)
-                }
-                try? FileManager.default.removeItem(at: quarantine)
-                throw error
+            guard let deletionCoordinator = self.deletionCoordinator else {
+                throw InvoiceError.corruptData("database_unavailable")
             }
-            try? FileManager.default.removeItem(at: quarantine)
+            try await deletionCoordinator.deleteAll()
             try await self.refresh()
         }
     }
@@ -287,17 +270,6 @@ final class AppModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do { try await work() } catch { errorMessage = String(describing: error) }
-    }
-
-    private func purgeCompletedDeletionQuarantines() {
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: []
-        ) else { return }
-        for entry in entries where entry.lastPathComponent.hasPrefix(".Deletion-") {
-            try? FileManager.default.removeItem(at: entry)
-        }
     }
 
     private func localDate(_ date: Date) throws -> LocalDate {
