@@ -468,6 +468,71 @@ final class InvoicePersistenceTests: XCTestCase {
         }
     }
 
+    func testPreparedIssueStoresTheExactReviewedPDFBytes() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let number = try await database.proposedNumber(issueDate: fixture.draft.issueDate, prefix: "")
+        let previewInvoice = try InvoiceCalculator.snapshot(
+            number: number,
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit]
+        )
+        let reviewedBytes = Data("exact-reviewed-pdf".utf8)
+        let service = IssueService(database: database, filesRoot: root) { _ in
+            Data("must-not-be-regenerated".utf8)
+        }
+
+        let issued = try await service.issuePrepared(
+            invoice: previewInvoice,
+            pdfData: reviewedBytes,
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit],
+            hasPro: true
+        )
+
+        let canonical = try await service.canonicalPDFData(for: issued)
+        XCTAssertEqual(canonical, reviewedBytes)
+    }
+
+    func testPreparedIssueRejectsSnapshotMutation() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try AppDatabase(path: root.appendingPathComponent("data.sqlite").path)
+        let fixture = try await seed(database: database)
+        let number = try await database.proposedNumber(issueDate: fixture.draft.issueDate, prefix: "")
+        var previewInvoice = try InvoiceCalculator.snapshot(
+            number: number,
+            draft: fixture.draft,
+            business: fixture.business,
+            customer: fixture.customer,
+            sites: [fixture.site.id: fixture.site],
+            visits: [fixture.visit]
+        )
+        previewInvoice.status = .paid
+        let service = IssueService(database: database, filesRoot: root) { _ in Data("pdf".utf8) }
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await service.issuePrepared(
+                invoice: previewInvoice,
+                pdfData: Data("reviewed".utf8),
+                draft: fixture.draft,
+                business: fixture.business,
+                customer: fixture.customer,
+                sites: [fixture.site.id: fixture.site],
+                visits: [fixture.visit],
+                hasPro: true
+            )
+        }
+    }
+
     func testBackupValidationRejectsIssuedPayloadColumnMismatch() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -609,18 +674,25 @@ final class InvoicePersistenceTests: XCTestCase {
             draft: fixture.draft, business: fixture.business, customer: fixture.customer,
             sites: [fixture.site.id: fixture.site], visits: [fixture.visit], hasPro: true
         )
-        let quarantine = root.appendingPathComponent(".Deletion-committed", isDirectory: true)
+        let deletionID = UUID()
+        let quarantine = root.appendingPathComponent(
+            ".Deletion-\(deletionID.uuidString.lowercased())",
+            isDirectory: true
+        )
         try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
         try FileManager.default.moveItem(
             at: root.appendingPathComponent("Invoices", isDirectory: true),
             to: quarantine.appendingPathComponent("Invoices", isDirectory: true)
         )
-        try await database.deleteAllDomainData()
+        try await database.deleteAllDomainData(committedDeletionID: deletionID)
+        try await database.saveCustomer(Customer(name: "削除後の新規取引先"))
 
         try await DeletionCoordinator(database: database, filesRoot: root).reconcileInterruptedDeletion()
 
         let databaseIsEmpty = try await database.domainIsEmpty()
-        XCTAssertTrue(databaseIsEmpty)
+        let committedID = try await database.committedDeletionID()
+        XCTAssertFalse(databaseIsEmpty)
+        XCTAssertEqual(committedID, deletionID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("Invoices").path))
     }

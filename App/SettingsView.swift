@@ -1,5 +1,6 @@
 import InvoiceDomain
 import InvoiceEntitlements
+import InvoiceBackup
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -41,6 +42,8 @@ struct SettingsView: View {
     @State private var showImporter = false
     @State private var deletePhrase = ""
     @State private var showDelete = false
+    @State private var restorePreview: RestorePreview?
+    @State private var showResetSample = false
 
     var body: some View {
         NavigationStack {
@@ -110,6 +113,11 @@ struct SettingsView: View {
                     } label: {
                         Label(language.text("backup.restore"), systemImage: "square.and.arrow.down")
                     }
+                    Button {
+                        showResetSample = true
+                    } label: {
+                        Label(language.text("sample.reset"), systemImage: "arrow.counterclockwise")
+                    }
                     Button(role: .destructive) {
                         deletePhrase = ""
                         showDelete = true
@@ -147,6 +155,22 @@ struct SettingsView: View {
                 Task { await model.deleteAllData(); showDelete = false }
             }
         }
+        .sheet(item: $restorePreview) { preview in
+            RestoreConfirmationView(preview: preview, language: language) { mode in
+                Task {
+                    await model.restoreBackup(from: preview.url, mode: mode)
+                    restorePreview = nil
+                }
+            }
+        }
+        .confirmationDialog(language.text("sample.reset.title"), isPresented: $showResetSample) {
+            Button(language.text("sample.reset.confirm"), role: .destructive) {
+                Task { await model.resetSampleData() }
+            }
+            Button(language.text("action.cancel"), role: .cancel) {}
+        } message: {
+            Text(language.text("sample.reset.message"))
+        }
         .fileExporter(
             isPresented: $showExporter,
             document: exportDocument,
@@ -158,7 +182,11 @@ struct SettingsView: View {
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.datedInvoiceBackup]) { result in
             switch result {
-            case .success(let url): Task { await model.restoreBackup(from: url) }
+            case .success(let url):
+                Task {
+                    do { restorePreview = try await model.preflightRestore(from: url) }
+                    catch { model.errorMessage = language.errorText(error) }
+                }
             case .failure(let error): model.errorMessage = error.localizedDescription
             }
         }
@@ -193,9 +221,50 @@ struct SettingsView: View {
                 exportDocument = BackupDocument(wrapper: try await model.exportBackup())
                 showExporter = true
             } catch {
-                model.errorMessage = String(describing: error)
+                model.errorMessage = language.errorText(error)
             }
         }
+    }
+}
+
+private struct RestoreConfirmationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let preview: RestorePreview
+    let language: AppLanguage
+    let restore: (RestoreMode) -> Void
+
+    private var mergeReport: DatabaseMergeReport? { preview.merge.databaseMerge }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(language.text("restore.verified")) {
+                    LabeledContent(language.text("restore.pdfsAdded"), value: String(preview.replace.pdfsAdded))
+                    LabeledContent(language.text("restore.pdfsReused"), value: String(preview.replace.pdfsReused))
+                }
+                if let counts = mergeReport?.counts {
+                    Section(language.text("restore.mergeChanges")) {
+                        LabeledContent(language.text("field.customer"), value: String(counts.customers))
+                        LabeledContent(language.text("tab.work"), value: String(counts.visits))
+                        LabeledContent(language.text("tab.invoices"), value: String(counts.invoices))
+                    }
+                }
+                Section {
+                    Button(language.text("restore.merge")) { restore(.merge) }
+                        .disabled(mergeReport?.canCommit != true)
+                    Button(language.text("restore.replace"), role: .destructive) { restore(.replace) }
+                } footer: {
+                    Text(language.text("restore.safetyNote"))
+                }
+            }
+            .navigationTitle(language.text("restore.title"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(language.text("action.cancel")) { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -208,12 +277,33 @@ private struct AddCustomerView: View {
     @State private var address = ""
     @State private var saving = false
     @State private var showPro = false
+    @State private var closingDay = 0
+    @State private var paymentTermDays = 30
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField(language.text("field.customerName"), text: $name)
                 TextField(language.text("field.billingAddress"), text: $address, axis: .vertical)
+                if store.hasPro {
+                    Picker(language.text("field.closingDay"), selection: $closingDay) {
+                        Text(language.text("field.none")).tag(0)
+                        ForEach(1...31, id: \.self) { day in
+                            Text(String(format: language.text("field.dayFormat"), day)).tag(day)
+                        }
+                    }
+                    Picker(language.text("field.paymentTerm"), selection: $paymentTermDays) {
+                        ForEach([0, 7, 15, 30, 45, 60], id: \.self) { days in
+                            Text(String(format: language.text("field.daysFormat"), days)).tag(days)
+                        }
+                    }
+                } else {
+                    Button {
+                        showPro = true
+                    } label: {
+                        Label(language.text("customer.termsPro"), systemImage: "checkmark.seal")
+                    }
+                }
             }
             .navigationTitle(language.text("customer.add"))
             .toolbar {
@@ -234,7 +324,13 @@ private struct AddCustomerView: View {
         Task {
             defer { saving = false }
             do {
-                _ = try await model.addCustomer(name: name, address: address, hasPro: store.hasPro)
+                _ = try await model.addCustomer(
+                    name: name,
+                    address: address,
+                    closingDay: closingDay == 0 ? nil : closingDay,
+                    paymentTermDays: paymentTermDays,
+                    hasPro: store.hasPro
+                )
                 dismiss()
             } catch let error as InvoiceError where error == .entitlementRequired {
                 showPro = true

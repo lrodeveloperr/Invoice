@@ -15,6 +15,13 @@ struct PreviewPackage: Identifiable {
     let pdfData: Data
 }
 
+struct RestorePreview: Identifiable, Sendable {
+    let id = UUID()
+    let url: URL
+    let replace: RestoreReport
+    let merge: RestoreReport
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var business: BusinessProfile?
@@ -102,9 +109,20 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addCustomer(name: String, address: String, hasPro: Bool) async throws -> Customer {
+    func addCustomer(
+        name: String,
+        address: String,
+        closingDay: Int?,
+        paymentTermDays: Int,
+        hasPro: Bool
+    ) async throws -> Customer {
         guard let database else { throw InvoiceError.corruptData("database_unavailable") }
-        let customer = Customer(name: name, billingAddress: address)
+        let customer = Customer(
+            name: name,
+            billingAddress: address,
+            closingDay: hasPro ? closingDay : nil,
+            paymentTermDays: hasPro ? paymentTermDays : 30
+        )
         try await database.saveCustomer(customer, hasPro: hasPro)
         try await refresh()
         return customer
@@ -203,7 +221,9 @@ final class AppModel: ObservableObject {
 
     func issue(_ package: PreviewPackage, hasPro: Bool) async throws -> IssuedInvoice {
         guard let issueService else { throw InvoiceError.corruptData("database_unavailable") }
-        let invoice = try await issueService.issue(
+        let invoice = try await issueService.issuePrepared(
+            invoice: package.invoice,
+            pdfData: package.pdfData,
             draft: package.draft,
             business: package.business,
             customer: package.customer,
@@ -228,6 +248,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func markUnpaid(_ invoice: IssuedInvoice) async {
+        await perform {
+            guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
+            try await database.markInvoiceUnpaid(id: invoice.id)
+            try await self.refresh()
+        }
+    }
+
     func void(_ invoice: IssuedInvoice) async {
         await perform {
             guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
@@ -245,13 +273,23 @@ final class AppModel: ObservableObject {
         return try FileWrapper(url: package, options: .immediate)
     }
 
-    func restoreBackup(from url: URL) async {
+    func preflightRestore(from url: URL) async throws -> RestorePreview {
+        guard let database else { throw InvoiceError.corruptData("database_unavailable") }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let service = BackupService(database: database, filesRoot: root)
+        async let replace = service.preflightRestore(packageURL: url, mode: .replace)
+        async let merge = service.preflightRestore(packageURL: url, mode: .merge)
+        return try await RestorePreview(url: url, replace: replace, merge: merge)
+    }
+
+    func restoreBackup(from url: URL, mode: RestoreMode) async {
         await perform {
             guard let database = self.database else { throw InvoiceError.corruptData("database_unavailable") }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             _ = try await BackupService(database: database, filesRoot: self.root)
-                .restore(packageURL: url, mode: .replace)
+                .restore(packageURL: url, mode: mode)
             try await self.refresh()
         }
     }
@@ -262,6 +300,19 @@ final class AppModel: ObservableObject {
                 throw InvoiceError.corruptData("database_unavailable")
             }
             try await deletionCoordinator.deleteAll()
+            try await self.refresh()
+        }
+    }
+
+    func resetSampleData() async {
+        await perform {
+            guard let database = self.database,
+                  let deletionCoordinator = self.deletionCoordinator else {
+                throw InvoiceError.corruptData("database_unavailable")
+            }
+            try await deletionCoordinator.deleteAll()
+            try await self.loadJapaneseSample(database: database)
+            UserDefaults.standard.set(true, forKey: "didLoadJapaneseSample")
             try await self.refresh()
         }
     }

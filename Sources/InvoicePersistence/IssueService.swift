@@ -25,11 +25,63 @@ public actor IssueService {
         visits: [Visit],
         hasPro: Bool
     ) async throws -> IssuedInvoice {
+        let number = try await database.proposedNumber(issueDate: draft.issueDate, prefix: business.invoicePrefix)
+        let invoice = try InvoiceCalculator.snapshot(
+            number: number,
+            draft: draft,
+            business: business,
+            customer: customer,
+            sites: sites,
+            visits: visits
+        )
+        let pdfData = try await renderer(invoice)
+        return try await commit(
+            invoice: invoice,
+            pdfData: pdfData,
+            visits: visits,
+            hasPro: hasPro
+        )
+    }
+
+    public func issuePrepared(
+        invoice: IssuedInvoice,
+        pdfData: Data,
+        draft: InvoiceDraft,
+        business: BusinessProfile,
+        customer: Customer,
+        sites: [UUID: Site],
+        visits: [Visit],
+        hasPro: Bool
+    ) async throws -> IssuedInvoice {
+        let expected = try InvoiceCalculator.snapshot(
+            id: invoice.id,
+            number: invoice.number,
+            draft: draft,
+            business: business,
+            customer: customer,
+            sites: sites,
+            visits: visits,
+            issuedAt: invoice.issuedAt
+        )
+        guard Self.equivalentForIssue(invoice, expected) else {
+            throw InvoiceError.corruptData("prepared_invoice_mismatch")
+        }
+        return try await commit(
+            invoice: invoice,
+            pdfData: pdfData,
+            visits: visits,
+            hasPro: hasPro
+        )
+    }
+
+    private func commit(
+        invoice: IssuedInvoice,
+        pdfData: Data,
+        visits: [Visit],
+        hasPro: Bool
+    ) async throws -> IssuedInvoice {
         let entitlement = try await database.entitlementUsage(hasPro: hasPro)
         guard entitlement.permitsCleanIssue else { throw InvoiceError.entitlementRequired }
-        let number = try await database.proposedNumber(issueDate: draft.issueDate, prefix: business.invoicePrefix)
-        var invoice = try InvoiceCalculator.snapshot(number: number, draft: draft, business: business, customer: customer, sites: sites, visits: visits)
-        let pdfData = try await renderer(invoice)
         guard !pdfData.isEmpty else { throw InvoiceError.corruptData("empty_pdf") }
         let hash = SHA256.hash(data: pdfData).map { String(format: "%02x", $0) }.joined()
 
@@ -68,9 +120,10 @@ public actor IssueService {
         } catch {
             throw InvoiceError.corruptData("issued_pdf_needs_recovery")
         }
-        invoice.pdfRelativePath = finalRelative
-        invoice.pdfSHA256 = hash
-        return invoice
+        var storedInvoice = invoice
+        storedInvoice.pdfRelativePath = finalRelative
+        storedInvoice.pdfSHA256 = hash
+        return storedInvoice
     }
 
     public func recoverPendingFileOperations() async throws {
@@ -142,5 +195,45 @@ public actor IssueService {
             throw InvoiceError.corruptData("unsafe_recovery_path")
         }
         return url
+    }
+
+    private static func equivalentForIssue(_ lhs: IssuedInvoice, _ rhs: IssuedInvoice) -> Bool {
+        guard lhs.id == rhs.id,
+              lhs.number == rhs.number,
+              lhs.issueDate == rhs.issueDate,
+              lhs.dueDate == rhs.dueDate,
+              lhs.coveredStart == rhs.coveredStart,
+              lhs.coveredEnd == rhs.coveredEnd,
+              lhs.issuer == rhs.issuer,
+              lhs.customerID == rhs.customerID,
+              lhs.customerName == rhs.customerName,
+              lhs.customerAddress == rhs.customerAddress,
+              lhs.taxTotals == rhs.taxTotals,
+              lhs.subtotal == rhs.subtotal,
+              lhs.totalTax == rhs.totalTax,
+              lhs.grandTotal == rhs.grandTotal,
+              lhs.lineRounding == rhs.lineRounding,
+              lhs.taxRounding == rhs.taxRounding,
+              lhs.status == .issued,
+              lhs.paidDate == nil,
+              lhs.replacesInvoiceID == nil,
+              lhs.replacedByInvoiceID == nil,
+              lhs.pdfRelativePath == nil,
+              lhs.pdfSHA256 == nil,
+              lhs.issuedAt == rhs.issuedAt,
+              lhs.lines.count == rhs.lines.count else { return false }
+        return zip(lhs.lines, rhs.lines).allSatisfy { left, right in
+            left.sourceVisitID == right.sourceVisitID &&
+            left.workDate == right.workDate &&
+            left.siteName == right.siteName &&
+            left.siteAddress == right.siteAddress &&
+            left.position == right.position &&
+            left.description == right.description &&
+            left.quantity == right.quantity &&
+            left.unit == right.unit &&
+            left.unitPrice == right.unitPrice &&
+            left.taxRate == right.taxRate &&
+            left.net == right.net
+        }
     }
 }

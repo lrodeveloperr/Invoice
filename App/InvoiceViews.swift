@@ -86,12 +86,6 @@ private struct InvoiceDetailView: View {
             if let pdfData {
                 PDFKitView(data: pdfData)
                     .accessibilityLabel(language.text("preview.pdfAccessibility"))
-            } else if invoice.status == .voided {
-                ContentUnavailableView(
-                    language.text("invoice.voided.title"),
-                    systemImage: "xmark.seal",
-                    description: Text(language.text("invoice.voided.message"))
-                )
             } else {
                 ProgressView(language.text("invoice.loading"))
             }
@@ -113,6 +107,15 @@ private struct InvoiceDetailView: View {
                     } label: {
                         Label(language.text("invoice.markPaid"), systemImage: "checkmark.circle")
                     }
+                }
+                if invoice.status == .paid {
+                    Button {
+                        Task { await model.markUnpaid(invoice) }
+                    } label: {
+                        Label(language.text("invoice.markUnpaid"), systemImage: "arrow.uturn.backward.circle")
+                    }
+                }
+                if invoice.status == .issued || invoice.status == .paid {
                     Button(role: .destructive) {
                         confirmVoid = true
                     } label: {
@@ -134,7 +137,6 @@ private struct InvoiceDetailView: View {
     }
 
     private func loadPDF() async {
-        guard invoice.status != .voided else { return }
         do { pdfData = try await model.canonicalPDF(for: invoice) }
         catch { model.errorMessage = String(describing: error) }
     }

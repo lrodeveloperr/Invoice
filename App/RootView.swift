@@ -42,7 +42,7 @@ struct RootView: View {
         )) {
             Button(language.text("action.ok"), role: .cancel) { model.errorMessage = nil }
         } message: {
-            Text(model.errorMessage ?? language.text("error.generic"))
+            Text(language.errorText(id: model.errorMessage))
         }
     }
 }

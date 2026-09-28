@@ -379,7 +379,7 @@ public actor AppDatabase {
         }
     }
 
-    public func deleteAllDomainData() throws {
+    public func deleteAllDomainData(committedDeletionID: UUID? = nil) throws {
         try writer.write { db in
             try db.execute(sql: "DELETE FROM file_operation_journal")
             try db.execute(sql: "DELETE FROM invoice_visit_link")
@@ -392,6 +392,25 @@ public actor AppDatabase {
             try db.execute(sql: "DELETE FROM invoice_sequence")
             try db.execute(sql: "DELETE FROM app_setting")
             try db.execute(sql: "UPDATE entitlement_usage SET first_clean_invoice_id = NULL WHERE singleton = 1")
+            if let committedDeletionID {
+                try db.execute(
+                    sql: "INSERT INTO app_setting(key, value) VALUES ('committed_deletion_id', ?)",
+                    arguments: [committedDeletionID.uuidString.lowercased()]
+                )
+            }
+        }
+    }
+
+    public func committedDeletionID() throws -> UUID? {
+        try writer.read { db in
+            guard let value = try String.fetchOne(
+                db,
+                sql: "SELECT value FROM app_setting WHERE key = 'committed_deletion_id'"
+            ) else { return nil }
+            guard let id = UUID(uuidString: value) else {
+                throw InvoiceError.corruptData("invalid_committed_deletion_id")
+            }
+            return id
         }
     }
 

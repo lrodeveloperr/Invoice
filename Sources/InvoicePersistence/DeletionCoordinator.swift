@@ -16,14 +16,15 @@ public actor DeletionCoordinator {
 
     public func deleteAll() async throws {
         try await reconcileInterruptedDeletion()
+        let deletionID = UUID()
         let quarantine = filesRoot.appendingPathComponent(
-            Self.quarantinePrefix + UUID().uuidString,
+            Self.quarantinePrefix + deletionID.uuidString.lowercased(),
             isDirectory: true
         )
         try fileManager.createDirectory(at: quarantine, withIntermediateDirectories: true)
         do {
             try moveLiveDirectories(into: quarantine)
-            try await database.deleteAllDomainData()
+            try await database.deleteAllDomainData(committedDeletionID: deletionID)
         } catch {
             let originalError = error
             do {
@@ -42,17 +43,21 @@ public actor DeletionCoordinator {
     public func reconcileInterruptedDeletion() async throws {
         let quarantines = try quarantineDirectories()
         guard !quarantines.isEmpty else { return }
-        if try await database.domainIsEmpty() {
-            for quarantine in quarantines {
+        let committedID = try await database.committedDeletionID()
+        var interrupted: [URL] = []
+        for quarantine in quarantines {
+            if quarantineID(for: quarantine) == committedID {
                 try fileManager.removeItem(at: quarantine)
+            } else {
+                interrupted.append(quarantine)
             }
-            return
         }
-        guard quarantines.count == 1 else {
+        guard !interrupted.isEmpty else { return }
+        guard interrupted.count == 1 else {
             throw InvoiceError.corruptData("multiple_interrupted_deletions")
         }
-        try restoreDirectories(from: quarantines[0])
-        try fileManager.removeItem(at: quarantines[0])
+        try restoreDirectories(from: interrupted[0])
+        try fileManager.removeItem(at: interrupted[0])
     }
 
     private func quarantineDirectories() throws -> [URL] {
@@ -67,6 +72,12 @@ public actor DeletionCoordinator {
             }
             return values.isDirectory == true && values.isSymbolicLink != true
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func quarantineID(for url: URL) -> UUID? {
+        let name = url.lastPathComponent
+        guard name.hasPrefix(Self.quarantinePrefix) else { return nil }
+        return UUID(uuidString: String(name.dropFirst(Self.quarantinePrefix.count)))
     }
 
     private func moveLiveDirectories(into quarantine: URL) throws {

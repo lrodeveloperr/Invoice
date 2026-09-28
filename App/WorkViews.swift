@@ -11,6 +11,7 @@ private enum WorkDestination: Hashable {
 
 struct WorkSplitView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let language: AppLanguage
     @State private var selection: WorkDestination?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -47,13 +48,13 @@ struct WorkSplitView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         selection = .builder
-                        columnVisibility = .detailOnly
+                        if horizontalSizeClass == .compact { columnVisibility = .detailOnly }
                     } label: {
                         Label(language.text("work.buildInvoice"), systemImage: "doc.badge.plus")
                     }
                     Button {
                         selection = .newVisit
-                        columnVisibility = .detailOnly
+                        if horizontalSizeClass == .compact { columnVisibility = .detailOnly }
                     } label: {
                         Label(language.text("work.record"), systemImage: "plus")
                     }
@@ -112,6 +113,7 @@ struct WorkSplitView: View {
 }
 
 private struct VisitRow: View {
+    @EnvironmentObject private var model: AppModel
     let visit: Visit
     let language: AppLanguage
 
@@ -130,6 +132,11 @@ private struct VisitRow: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if let site = model.sites.first(where: { $0.id == visit.siteID }) {
+                Label(site.name, systemImage: "mappin.and.ellipse")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             StateBadge(text: language.text("state.unbilled"), color: .orange)
         }
         .padding(.vertical, 4)
@@ -175,15 +182,15 @@ private struct VisitEditorView: View {
     @EnvironmentObject private var store: StoreKitEntitlementStore
     let language: AppLanguage
     let onSaved: () -> Void
-    @State private var customerID: UUID?
-    @State private var siteID: UUID?
-    @State private var workDate = Date()
-    @State private var description = ""
-    @State private var quantity = "1"
-    @State private var unit = "回"
-    @State private var unitPrice = ""
-    @State private var taxBasisPoints = 1_000
-    @State private var note = ""
+    @AppStorage("visitDraft.customerID") private var customerIDValue = ""
+    @AppStorage("visitDraft.siteID") private var siteIDValue = ""
+    @AppStorage("visitDraft.workDate") private var workDateValue = Date().timeIntervalSince1970
+    @AppStorage("visitDraft.description") private var description = ""
+    @AppStorage("visitDraft.quantity") private var quantity = "1"
+    @AppStorage("visitDraft.unit") private var unit = "回"
+    @AppStorage("visitDraft.unitPrice") private var unitPrice = ""
+    @AppStorage("visitDraft.tax") private var taxBasisPoints = 1_000
+    @AppStorage("visitDraft.note") private var note = ""
     @State private var saving = false
     @State private var showPro = false
 
@@ -201,6 +208,33 @@ private struct VisitEditorView: View {
         return model.sites(for: customerID)
     }
 
+    private var customerID: UUID? {
+        get { UUID(uuidString: customerIDValue) }
+        nonmutating set { customerIDValue = newValue?.uuidString ?? "" }
+    }
+
+    private var siteID: UUID? {
+        get { UUID(uuidString: siteIDValue) }
+        nonmutating set { siteIDValue = newValue?.uuidString ?? "" }
+    }
+
+    private var workDate: Date {
+        get { Date(timeIntervalSince1970: workDateValue) }
+        nonmutating set { workDateValue = newValue.timeIntervalSince1970 }
+    }
+
+    private var customerBinding: Binding<UUID?> {
+        Binding(get: { customerID }, set: { customerID = $0 })
+    }
+
+    private var siteBinding: Binding<UUID?> {
+        Binding(get: { siteID }, set: { siteID = $0 })
+    }
+
+    private var workDateBinding: Binding<Date> {
+        Binding(get: { workDate }, set: { workDate = $0 })
+    }
+
     var body: some View {
         Form {
             if previousVisit != nil {
@@ -215,19 +249,19 @@ private struct VisitEditorView: View {
                 }
             }
             Section(language.text("visit.whereWhen")) {
-                Picker(language.text("field.customer"), selection: $customerID) {
+                Picker(language.text("field.customer"), selection: customerBinding) {
                     Text(language.text("field.choose")).tag(UUID?.none)
                     ForEach(model.customers.filter(\.isActive)) { customer in
                         Text(customer.name).tag(Optional(customer.id))
                     }
                 }
-                Picker(language.text("field.site"), selection: $siteID) {
+                Picker(language.text("field.site"), selection: siteBinding) {
                     Text(language.text("field.choose")).tag(UUID?.none)
                     ForEach(availableSites) { site in
                         Text(site.name).tag(Optional(site.id))
                     }
                 }
-                DatePicker(language.text("field.date"), selection: $workDate, displayedComponents: .date)
+                DatePicker(language.text("field.date"), selection: workDateBinding, displayedComponents: .date)
             }
             Section(language.text("visit.service")) {
                 TextField(language.text("field.service"), text: $description)
@@ -260,8 +294,13 @@ private struct VisitEditorView: View {
         }
         .navigationTitle(language.text("visit.editor.title"))
         .onAppear {
-            if customerID == nil { customerID = model.customers.first(where: \.isActive)?.id }
-            if siteID == nil, let customerID { siteID = model.sites(for: customerID).first?.id }
+            if customerID == nil || !model.customers.contains(where: { $0.id == customerID && $0.isActive }) {
+                customerID = model.customers.first(where: \.isActive)?.id
+            }
+            if let customerID,
+               siteID == nil || !model.sites(for: customerID).contains(where: { $0.id == siteID }) {
+                siteID = model.sites(for: customerID).first?.id
+            }
         }
         .onChange(of: customerID) { _, newValue in
             siteID = newValue.flatMap { model.sites(for: $0).first?.id }
@@ -301,6 +340,12 @@ private struct VisitEditorView: View {
                     taxRate: rate,
                     note: note
                 )
+                description = ""
+                quantity = "1"
+                unit = "回"
+                unitPrice = ""
+                note = ""
+                workDate = Date()
                 onSaved()
             } catch {
                 model.errorMessage = String(describing: error)
@@ -313,11 +358,47 @@ private struct InvoiceBuilderView: View {
     @EnvironmentObject private var model: AppModel
     let language: AppLanguage
     let onPreview: (PreviewPackage) -> Void
-    @State private var customerID: UUID?
-    @State private var start = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
-    @State private var end = Date()
-    @State private var selected: Set<UUID> = []
+    @AppStorage("invoiceDraft.customerID") private var customerIDValue = ""
+    @AppStorage("invoiceDraft.start") private var startValue = (
+        Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    ).timeIntervalSince1970
+    @AppStorage("invoiceDraft.end") private var endValue = Date().timeIntervalSince1970
+    @AppStorage("invoiceDraft.selected") private var selectedValue = ""
     @State private var loading = false
+
+    private var customerID: UUID? {
+        get { UUID(uuidString: customerIDValue) }
+        nonmutating set { customerIDValue = newValue?.uuidString ?? "" }
+    }
+
+    private var start: Date {
+        get { Date(timeIntervalSince1970: startValue) }
+        nonmutating set { startValue = newValue.timeIntervalSince1970 }
+    }
+
+    private var end: Date {
+        get { Date(timeIntervalSince1970: endValue) }
+        nonmutating set { endValue = newValue.timeIntervalSince1970 }
+    }
+
+    private var selected: Set<UUID> {
+        get { Set(selectedValue.split(separator: ",").compactMap { UUID(uuidString: String($0)) }) }
+        nonmutating set {
+            selectedValue = newValue.map(\.uuidString).sorted().joined(separator: ",")
+        }
+    }
+
+    private var customerBinding: Binding<UUID?> {
+        Binding(get: { customerID }, set: { customerID = $0 })
+    }
+
+    private var startBinding: Binding<Date> {
+        Binding(get: { start }, set: { start = $0 })
+    }
+
+    private var endBinding: Binding<Date> {
+        Binding(get: { end }, set: { end = $0 })
+    }
 
     private var eligible: [Visit] {
         guard let customerID else { return [] }
@@ -328,17 +409,36 @@ private struct InvoiceBuilderView: View {
         }
     }
 
+    private var selectedVisits: [Visit] { eligible.filter { selected.contains($0.id) } }
+
+    private var estimatedTotals: (subtotal: Int64, tax: Int64, total: Int64) {
+        let subtotal = selectedVisits.flatMap(\.lines).reduce(Int64(0)) { $0 + $1.net.yen }
+        let groups = Dictionary(grouping: selectedVisits.flatMap(\.lines), by: { $0.taxRate.basisPoints })
+        let tax = groups.values.reduce(Int64(0)) { partial, lines in
+            let taxable = lines.reduce(Int64(0)) { $0 + $1.net.yen }
+            guard let money = try? Money(yen: taxable),
+                  let rate = lines.first?.taxRate,
+                  let amount = try? InvoiceCalculator.tax(
+                    for: money,
+                    rate: rate,
+                    rounding: model.business?.taxRounding ?? .floor
+                  ) else { return partial }
+            return partial + amount.yen
+        }
+        return (subtotal, tax, subtotal + tax)
+    }
+
     var body: some View {
         Form {
             Section(language.text("builder.period")) {
-                Picker(language.text("field.customer"), selection: $customerID) {
+                Picker(language.text("field.customer"), selection: customerBinding) {
                     Text(language.text("field.choose")).tag(UUID?.none)
                     ForEach(model.customers.filter(\.isActive)) { customer in
                         Text(customer.name).tag(Optional(customer.id))
                     }
                 }
-                DatePicker(language.text("field.startDate"), selection: $start, displayedComponents: .date)
-                DatePicker(language.text("field.endDate"), selection: $end, in: start..., displayedComponents: .date)
+                DatePicker(language.text("field.startDate"), selection: startBinding, displayedComponents: .date)
+                DatePicker(language.text("field.endDate"), selection: endBinding, in: start..., displayedComponents: .date)
             }
             Section(language.text("builder.unbilled")) {
                 if eligible.isEmpty {
@@ -346,8 +446,10 @@ private struct InvoiceBuilderView: View {
                 } else {
                     ForEach(eligible) { visit in
                         Button {
-                            if selected.contains(visit.id) { selected.remove(visit.id) }
-                            else { selected.insert(visit.id) }
+                            var updated = selected
+                            if updated.contains(visit.id) { updated.remove(visit.id) }
+                            else { updated.insert(visit.id) }
+                            selected = updated
                         } label: {
                             HStack {
                                 Image(systemName: selected.contains(visit.id) ? "checkmark.circle.fill" : "circle")
@@ -357,6 +459,11 @@ private struct InvoiceBuilderView: View {
                                     Text(visit.lines.first?.description ?? "")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    if let site = model.sites.first(where: { $0.id == visit.siteID }) {
+                                        Text(site.name)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 Text("¥" + visit.lines.reduce(0) { $0 + $1.net.yen }.formatted(.number.grouping(.automatic)))
@@ -364,6 +471,31 @@ private struct InvoiceBuilderView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                    }
+                }
+            }
+            if !selected.isEmpty {
+                Section(language.text("builder.summary")) {
+                    LabeledContent(
+                        language.text("builder.selectedCount"),
+                        value: String(selectedVisits.count)
+                    )
+                    LabeledContent(
+                        language.text("builder.subtotal"),
+                        value: "¥" + estimatedTotals.subtotal.formatted(.number.grouping(.automatic))
+                    )
+                    LabeledContent(
+                        language.text("builder.tax"),
+                        value: "¥" + estimatedTotals.tax.formatted(.number.grouping(.automatic))
+                    )
+                    LabeledContent(
+                        language.text("builder.total"),
+                        value: "¥" + estimatedTotals.total.formatted(.number.grouping(.automatic))
+                    )
+                    .fontWeight(.semibold)
+                    if model.business?.registrationNumberIsValid != true {
+                        Label(language.text("builder.registrationWarning"), systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
                     }
                 }
             }
@@ -386,7 +518,9 @@ private struct InvoiceBuilderView: View {
     }
 
     private func initializeSelection() {
-        if customerID == nil { customerID = model.customers.first(where: \.isActive)?.id }
+        if customerID == nil || !model.customers.contains(where: { $0.id == customerID && $0.isActive }) {
+            customerID = model.customers.first(where: \.isActive)?.id
+        }
         let calendar = Calendar.current
         if let range = calendar.range(of: .day, in: .month, for: start) {
             end = calendar.date(bySetting: .day, value: range.count, of: start) ?? Date()
