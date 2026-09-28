@@ -54,8 +54,10 @@ final class InvoicePersistenceTests: XCTestCase {
         first.isActive = false
         try await database.saveCustomer(first)
         try await database.saveCustomer(Customer(name: "三"))
-        XCTAssertEqual(try await database.activeCustomerCount(), 2)
-        XCTAssertEqual(try await database.customers().filter(\.isActive).count, 2)
+        let activeCount = try await database.activeCustomerCount()
+        let activeCustomers = try await database.customers().filter(\.isActive)
+        XCTAssertEqual(activeCount, 2)
+        XCTAssertEqual(activeCustomers.count, 2)
     }
 
     func testServiceTemplatesRequireProAndRoundTripThroughBackup() async throws {
@@ -475,7 +477,8 @@ final class InvoicePersistenceTests: XCTestCase {
         let preflight = try await backup.preflightRestore(packageURL: package, mode: .merge)
         XCTAssertTrue(try XCTUnwrap(preflight.databaseMerge).canCommit)
         _ = try await backup.restore(packageURL: package, mode: .merge)
-        XCTAssertEqual(try await targetDatabase.invoices().count, 2)
+        let restoredInvoices = try await targetDatabase.invoices()
+        XCTAssertEqual(restoredInvoices.count, 2)
         try await targetDatabase.integrityCheck()
     }
 
@@ -921,6 +924,12 @@ final class InvoicePersistenceTests: XCTestCase {
             pdfData: Data("replacement".utf8),
             hasPro: true
         )
+        let billedUnrelatedVisit: Visit = {
+            var visit = unrelatedVisit
+            visit.state = .billed(invoiceID: issuedReplacement.id)
+            visit.updatedAt = Date()
+            return visit
+        }()
 
         let hostile = try DatabaseQueue(path: databasePath)
         try await hostile.write { db in
@@ -930,8 +939,6 @@ final class InvoicePersistenceTests: XCTestCase {
             var returnedVisit = fixture.visit
             returnedVisit.state = .unbilled
             returnedVisit.updatedAt = Date()
-            unrelatedVisit.state = .billed(invoiceID: issuedReplacement.id)
-            unrelatedVisit.updatedAt = Date()
             try db.execute(
                 sql: "UPDATE visit SET state = 'unbilled', billed_invoice_id = NULL, payload = ?, updated_at = ? WHERE id = ?",
                 arguments: [
@@ -944,9 +951,9 @@ final class InvoicePersistenceTests: XCTestCase {
                 sql: "UPDATE visit SET state = 'billed', billed_invoice_id = ?, payload = ?, updated_at = ? WHERE id = ?",
                 arguments: [
                     issuedReplacement.id.uuidString.lowercased(),
-                    try encoder.encode(unrelatedVisit),
-                    unrelatedVisit.updatedAt.timeIntervalSince1970,
-                    unrelatedVisit.id.uuidString.lowercased()
+                    try encoder.encode(billedUnrelatedVisit),
+                    billedUnrelatedVisit.updatedAt.timeIntervalSince1970,
+                    billedUnrelatedVisit.id.uuidString.lowercased()
                 ]
             )
             try db.execute(
@@ -960,7 +967,7 @@ final class InvoicePersistenceTests: XCTestCase {
                 sql: "INSERT INTO invoice_visit_link(invoice_id, visit_id) VALUES (?, ?)",
                 arguments: [
                     issuedReplacement.id.uuidString.lowercased(),
-                    unrelatedVisit.id.uuidString.lowercased()
+                    billedUnrelatedVisit.id.uuidString.lowercased()
                 ]
             )
         }
