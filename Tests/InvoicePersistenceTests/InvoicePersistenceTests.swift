@@ -438,7 +438,8 @@ final class InvoicePersistenceTests: XCTestCase {
         var forgedInvoice = invoice
         forgedInvoice.pdfRelativePath = roguePath
         forgedInvoice.pdfSHA256 = SHA256.hash(data: rogueData).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(try await service.canonicalPDFData(for: forgedInvoice), expected)
+        let dataForForgedInput = try await service.canonicalPDFData(for: forgedInvoice)
+        XCTAssertEqual(dataForForgedInput, expected)
 
         let path = try XCTUnwrap(invoice.pdfRelativePath)
         try Data("tampered".utf8).write(to: root.appendingPathComponent(path), options: .atomic)
