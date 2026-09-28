@@ -10,7 +10,7 @@ extension UTType {
     )
 }
 
-struct BackupDocument: FileDocument {
+struct BackupDocument: FileDocument, @unchecked Sendable {
     static var readableContentTypes: [UTType] { [.datedInvoiceBackup] }
     let wrapper: FileWrapper
 
