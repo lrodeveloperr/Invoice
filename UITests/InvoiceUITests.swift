@@ -2,16 +2,16 @@ import XCTest
 
 @MainActor
 final class InvoiceUITests: XCTestCase {
-    private var app: XCUIApplication!
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-        app = XCUIApplication()
+    private func launchApp() -> XCUIApplication {
+        let app = XCUIApplication()
         app.launchArguments.append("-ui-testing")
         app.launch()
+        return app
     }
 
     func testThreePrimaryDestinationsRemainReachableAfterRotation() throws {
+        continueAfterFailure = false
+        let app = launchApp()
         let tabBar = app.tabBars.firstMatch
         XCTAssertTrue(tabBar.waitForExistence(timeout: 10))
         XCTAssertEqual(tabBar.buttons.count, 3)
@@ -35,6 +35,8 @@ final class InvoiceUITests: XCTestCase {
     }
 
     func testLargeContentSizeKeepsInvoiceCreationReachable() throws {
+        continueAfterFailure = false
+        let app = launchApp()
         app.terminate()
         app.launchEnvironment["UIPreferredContentSizeCategoryName"] = "UICTContentSizeCategoryAccessibilityXXXL"
         app.launch()
